@@ -1,0 +1,51 @@
+# ========================
+# Python (backend)
+# ========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# ========================
+# Node.js (frontend)
+# ========================
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ========================
+# Database & generated files
+# ========================
+data/*.db
+data/*.xlsx
+
+# ========================
+# IDE & OS
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ========================
+# Misc
+# ========================
+*.log
+*.tmp
+*.bak
