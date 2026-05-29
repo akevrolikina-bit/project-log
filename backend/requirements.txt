@@ -1,0 +1,22 @@
+# Core
+fastapi==0.115.13
+uvicorn[standard]==0.34.3
+pydantic==2.11.4
+pydantic-settings==2.9.1
+python-dotenv==1.1.0
+
+# Database
+sqlalchemy==2.0.41
+
+# Auth (Phase 1)
+PyJWT==2.10.1
+
+# Jira integration
+jira==3.8.0
+
+# Google Docs integration
+google-api-python-client==2.172.0
+google-auth-oauthlib==1.2.1
+
+# Excel generation
+openpyxl==3.1.5
