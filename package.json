@@ -1,0 +1,16 @@
+{
+  "private": true,
+  "name": "timeaudit",
+  "description": "Jira time-logging review tool — project runner",
+  "scripts": {
+    "setup": "npm run setup:backend && npm run setup:frontend",
+    "setup:backend": "cd backend && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt",
+    "setup:frontend": "cd frontend && npm install",
+    "backend": "cd backend && .venv\\Scripts\\uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "frontend": "cd frontend && npm run dev",
+    "dev": "concurrently --names BACK,FRONT --prefix-colors blue,magenta \"npm run backend\" \"npm run frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.0"
+  }
+}
