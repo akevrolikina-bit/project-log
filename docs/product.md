@@ -26,8 +26,8 @@ All of this is done manually in Excel, for 10–20 people across 3 countries. Ta
 
 ### Phase 1 — MVP
 
-- Fetch worklogs from Jira API (for an arbitrary period)
-- Fetch tasks by filter (region + project)
+- Import worklogs from Excel file (standard Jira worklog export for an arbitrary period)
+- Support two delivery methods: UI upload and auto-read from a configured folder
 - Load rules from Google Docs (task list, reconciliation rules)
 - Automated checks: permitted tasks + production calendar (RU/KZ/BY)
 - Generate Excel (separate sheet per employee)
@@ -48,10 +48,9 @@ All of this is done manually in Excel, for 10–20 people across 3 countries. Ta
 
 ## Data Sources
 
-| Source | What we fetch | Access |
-|--------|--------------|--------|
-| Jira Server API | Employee worklogs for a period | Personal Access Token (read-only) |
-| Jira Server API | Tasks by filter (region + project) | Personal Access Token (read-only) |
+| Source | What we get | Access |
+|--------|-------------|--------|
+| Local Excel file | Employee worklogs for a period (standard Jira export) | Uploaded via UI or read from a configured folder |
 | Google Docs API | Permitted/prohibited task list + rules | OAuth (read-only) |
 
 ## Key Parameters
@@ -68,7 +67,7 @@ All of this is done manually in Excel, for 10–20 people across 3 countries. Ta
 ## Product Principles
 
 - **Iterative** — MVP first, then add features as needed
-- **Read-only from Jira** — the app never modifies anything, only reads
+- **Data from Excel export** — worklogs are imported from a standard Jira export file (no direct Jira connection)
 - **Rules in Google Docs** — updated by multiple leads, the app fetches automatically
 - **Output is Excel** — one file that can be forwarded to the team
 - **Local at launch** — runs on a computer, can be moved to the cloud later
@@ -78,8 +77,7 @@ All of this is done manually in Excel, for 10–20 people across 3 countries. Ta
 
 ```
 INPUT DATA
-├── Jira API: employee worklogs
-├── Jira API: tasks by filter (region + project)
+├── Excel file: employee worklogs (Jira export, uploaded or from folder)
 ├── Google Docs: permitted tasks + rules
 └── Settings: employees + calendars + period
         │

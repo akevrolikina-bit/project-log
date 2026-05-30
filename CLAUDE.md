@@ -1,6 +1,6 @@
 # Jira Time Log Checker
 
-A web application for reviewing team time-logging compliance in Jira.
+A web application for reviewing team time-logging compliance based on Excel worklog exports from Jira.
 
 ## Project Navigation
 
@@ -17,6 +17,14 @@ A web application for reviewing team time-logging compliance in Jira.
 - Do not work with files outside the project root.
 - Before using third-party libraries — study their documentation.
 - When working on the frontend and visual elements — always study `docs/brandbook.html` and follow it.
+
+## Conventions
+
+- `AGENTS.md` and `CLAUDE.md` are intentional duplicates (same content, different AI tools read them). Always update both when changing one.
+
+## Conventions
+
+- `AGENTS.md` and `CLAUDE.md` are intentional duplicates (same content, different AI tools read them). Always update both when changing one.
 
 ## Growth Principle
 

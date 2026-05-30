@@ -17,8 +17,7 @@ class Settings(BaseSettings):
 
     database_url: str = f"sqlite:///{PROJECT_ROOT / 'data' / 'app.db'}"
 
-    jira_url: str = ""
-    jira_token: str = ""
+    excel_input_folder: str = str(PROJECT_ROOT / "data" / "input")
 
     google_credentials_path: str = ""
 

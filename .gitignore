@@ -30,7 +30,7 @@ pnpm-debug.log*
 # Database & generated files
 # ========================
 data/*.db
-data/*.xlsx
+data/**/*.xlsx
 
 # ========================
 # IDE & OS

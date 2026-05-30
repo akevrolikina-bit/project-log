@@ -11,7 +11,7 @@ In the first phase, everything runs locally (on the developer's machine).
 |-----------|-----------|
 | Language | Python 3.12+ |
 | Framework | FastAPI |
-| Jira integration | jira (Python) |
+| Excel import (worklog parsing) | pandas + openpyxl |
 | Google Docs integration | google-api-python-client |
 | Excel generation | openpyxl |
 | AI (Phase 2) | openai |
@@ -54,7 +54,7 @@ When the app is ready for deployment, the backend can be moved to Railway, the f
 | What | Where | Notes |
 |------|-------|-------|
 | Rules and task list | Google Docs | Edited by leads manually, fetched automatically by the app |
-| Jira data (worklogs, tasks) | Fetched from Jira API on demand | Not duplicated — fresh data each time |
+| Worklog data (Excel) | Imported from Excel file (uploaded via UI or read from input folder) | Standard Jira worklog export |
 | Settings (employees, calendars, teams) | SQLite (local) | Persistent between sessions |
 | Users and authentication | SQLite (local) | Standard |
 | Review history | SQLite (local) | For accessing past results |
@@ -72,7 +72,8 @@ project-log/
 
 ## Technology Choice Rationale
 
-- **Python** — best support for key integrations (Jira, Google Docs, Excel, AI)
+- **Python** — best support for key integrations (Google Docs, Excel, AI)
+- **pandas** — powerful tabular data processing, ideal for parsing and analyzing Excel worklog exports
 - **FastAPI** — modern, lightweight, with auto-generated API documentation
 - **React/Next.js** — largest UI component ecosystem, best agent support
 - **SQLite** — database in a single file, no server installation required. Easy to migrate to PostgreSQL when moving to the cloud

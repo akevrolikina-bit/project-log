@@ -11,8 +11,8 @@ sqlalchemy==2.0.41
 # Auth (Phase 1)
 PyJWT==2.10.1
 
-# Jira integration
-jira==3.8.0
+# Excel import (worklog parsing)
+pandas==2.2.3
 
 # Google Docs integration
 google-api-python-client==2.172.0
