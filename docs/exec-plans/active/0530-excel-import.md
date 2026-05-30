@@ -288,3 +288,25 @@ Verification:
 - `GET /api/uploads/1/worklogs` → 1679 entries
 - `GET /api/uploads/1/worklogs?username=Фомина Екатерина` → 274 filtered entries
 - All 8 Phase 1 tests still pass
+
+### Phase 3 — COMPLETED (2026-05-30)
+
+Files created:
+- `frontend/src/lib/api.ts` — API helper functions (uploadFile, getUploads, getWorklogs)
+- `frontend/src/components/upload-zone.tsx` — drag-and-drop + file picker component
+- `frontend/src/components/worklog-table.tsx` — sortable/filterable data table with employee badges
+- `frontend/src/components/ui/table.tsx` — shadcn Table component (installed)
+- `frontend/src/components/ui/card.tsx` — shadcn Card component (installed)
+- `frontend/src/components/ui/input.tsx` — shadcn Input component (installed)
+- `frontend/src/components/ui/badge.tsx` — shadcn Badge component (installed)
+- `frontend/src/components/ui/skeleton.tsx` — shadcn Skeleton component (installed)
+
+Files modified:
+- `frontend/src/app/page.tsx` — replaced placeholder with full upload page layout
+- `frontend/next.config.ts` — fixed API proxy destination (`/api/:path*` → `http://localhost:8000/api/:path*`)
+
+Verification:
+- `npx next build` — compiled successfully, no TypeScript errors
+- `GET http://localhost:3000/api/uploads` → proxied to backend, returns upload list
+- `GET http://localhost:3000/api/uploads/1/worklogs?username=Фомина Екатерина` → 274 filtered entries
+- Frontend page loads at `http://localhost:3000` (status 200)
