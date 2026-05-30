@@ -220,6 +220,13 @@ Backend API should also work independently via Swagger at `http://localhost:8000
   a local config file lets us build and test the checking logic independently.
   Date: 2026-05-30
 
+- Decision: Read permitted tasks from Excel export instead of JSON config.
+  Rationale: The user exported the permitted-task list from Google Docs as
+  `data/input/Issues CHANGE.xlsx`. Parsing this file directly avoids a manual
+  JSON-conversion step and keeps data in sync with the Google Doc export.
+  The `permitted_tasks.py` service reads the Excel file via openpyxl.
+  Date: 2026-05-30
+
 - Decision: lxml is required as an additional dependency.
   Rationale: pandas.read_html() needs either lxml or html5lib as a parser backend.
   lxml is faster and more reliable for this use case.
@@ -310,3 +317,44 @@ Verification:
 - `GET http://localhost:3000/api/uploads` → proxied to backend, returns upload list
 - `GET http://localhost:3000/api/uploads/1/worklogs?username=Фомина Екатерина` → 274 filtered entries
 - Frontend page loads at `http://localhost:3000` (status 200)
+
+### Phase 4 — COMPLETED (2026-05-30)
+
+Files created:
+- `backend/app/services/calendar.py` — production calendar RU/KZ/BY, hardcoded 2026 holidays
+- `backend/app/services/permitted_tasks.py` — loads permitted tasks from `data/input/Issues CHANGE.xlsx`
+- `backend/app/services/checker.py` — `run_checks()`: permitted-task check + hours-mismatch check
+- `backend/app/models/check_result.py` — SQLAlchemy model `CheckResult` (id, upload_id, username, check_type, severity, message, details)
+- `backend/app/schemas/check.py` — Pydantic models (CheckResultResponse, CheckSummaryItem)
+- `backend/app/api/checks.py` — FastAPI router: POST /api/uploads/{id}/check, GET /api/uploads/{id}/results
+
+Files modified:
+- `backend/app/models/upload.py` — added `check_results` relationship
+- `backend/app/models/__init__.py` — added CheckResult import
+- `backend/app/main.py` — imported checks router, registered it, added CheckResult model import
+
+Adaptation from plan:
+- Used Excel file (`Issues CHANGE.xlsx`) instead of JSON config for permitted tasks.
+  The file is a Google Docs export with columns: project, Jira key, title, permission status ("да"/"нет").
+
+Verification:
+- `POST /api/uploads/7/check` → 18 check results (permitted-task warnings + hours mismatches)
+- `GET /api/uploads/7/results` → 9 employees, all with warning status
+- `GET /api/uploads/7/results?username=Фомина Екатерина` → filtered to 1 employee with 2 issues
+- All 8 Phase 1 tests still pass (`python -m pytest backend/tests/test_excel_parser.py -v`)
+
+### Phase 5 — COMPLETED (2026-05-30)
+
+Files created:
+- `frontend/src/components/check-results.tsx` — per-employee results table with expandable issues, color-coded status (green/yellow/red)
+- `frontend/src/components/check-button.tsx` — "Запустить проверку" button calling POST check + GET results
+
+Files modified:
+- `frontend/src/lib/api.ts` — added `CheckResult`, `CheckSummary` types and `runChecks()`, `getResults()` functions
+- `frontend/src/app/page.tsx` — full flow: upload → worklog table → check button → results section
+- `frontend/src/app/globals.css` — added brandbook status colors (`--success`, `--warning`, `--error` and light variants)
+
+Verification:
+- `npx next build` — compiled successfully, no TypeScript errors
+- `GET http://localhost:3000/api/uploads/7/results` → 9 employee summaries via proxy
+- Frontend page at `http://localhost:3000` shows upload, table, check button, and results after running checks

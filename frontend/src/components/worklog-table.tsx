@@ -287,6 +287,7 @@ export function WorklogTable({ entries, isLoading }: WorklogTableProps) {
               <TableHead>Дата</TableHead>
               <TableHead>Проект</TableHead>
               <TableHead>Ключ</TableHead>
+              <TableHead>Тип</TableHead>
               <TableHead className="max-w-[200px]">Название</TableHead>
               <TableHead className="text-right">Часы</TableHead>
               <TableHead className="max-w-[200px]">Комментарий</TableHead>
@@ -301,6 +302,7 @@ export function WorklogTable({ entries, isLoading }: WorklogTableProps) {
                 </TableCell>
                 <TableCell>{entry.project}</TableCell>
                 <TableCell className="font-mono text-xs">{entry.key}</TableCell>
+                <TableCell>{entry.task_type}</TableCell>
                 <TableCell className="max-w-[200px] truncate" title={entry.title}>
                   {entry.title}
                 </TableCell>

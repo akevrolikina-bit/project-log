@@ -3,26 +3,68 @@
 import { useCallback, useState } from "react";
 import { UploadZone } from "@/components/upload-zone";
 import { WorklogTable } from "@/components/worklog-table";
+import { CheckButton } from "@/components/check-button";
+import { CheckResults } from "@/components/check-results";
 import { Badge } from "@/components/ui/badge";
-import { getWorklogs, type UploadResponse, type WorklogEntry } from "@/lib/api";
+import {
+  getWorklogs,
+  getResults,
+  type UploadResponse,
+  type WorklogEntry,
+  type CheckSummary,
+} from "@/lib/api";
 
 export default function Home() {
   const [upload, setUpload] = useState<UploadResponse | null>(null);
   const [entries, setEntries] = useState<WorklogEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [summaries, setSummaries] = useState<CheckSummary[]>([]);
+  const [isLoadingWorklogs, setIsLoadingWorklogs] = useState(false);
+  const [isLoadingResults, setIsLoadingResults] = useState(false);
 
-  const handleUploadComplete = useCallback(async (result: UploadResponse) => {
-    setUpload(result);
-    setIsLoading(true);
+  const loadResults = useCallback(async (uploadId: number) => {
+    setIsLoadingResults(true);
     try {
-      const worklogs = await getWorklogs(result.id);
-      setEntries(worklogs);
+      const results = await getResults(uploadId);
+      setSummaries(results);
     } catch {
-      setEntries([]);
+      setSummaries([]);
     } finally {
-      setIsLoading(false);
+      setIsLoadingResults(false);
     }
   }, []);
+
+  const handleUploadComplete = useCallback(
+    async (result: UploadResponse) => {
+      setUpload(result);
+      setSummaries([]);
+      setIsLoadingWorklogs(true);
+      try {
+        const worklogs = await getWorklogs(result.id);
+        setEntries(worklogs);
+      } catch {
+        setEntries([]);
+      } finally {
+        setIsLoadingWorklogs(false);
+      }
+
+      if (result.status === "checked") {
+        await loadResults(result.id);
+      }
+    },
+    [loadResults]
+  );
+
+  const handleCheckComplete = useCallback(
+    (results: CheckSummary[]) => {
+      setSummaries(results);
+      if (upload) {
+        setUpload({ ...upload, status: "checked" });
+      }
+    },
+    [upload]
+  );
+
+  const showResults = summaries.length > 0 || isLoadingResults;
 
   return (
     <div className="mx-auto w-full max-w-[1100px] px-6 py-10">
@@ -38,18 +80,31 @@ export default function Home() {
       </section>
 
       {upload && (
-        <section className="mb-6 flex items-center gap-3">
+        <section className="mb-6 flex flex-wrap items-center gap-3">
           <Badge variant="secondary">{upload.filename}</Badge>
           <span className="text-xs text-muted-foreground">
             {upload.row_count} записей
           </span>
-          <Badge variant="outline">{upload.status}</Badge>
+          <Badge variant="outline">
+            {upload.status === "checked" ? "проверено" : "загружено"}
+          </Badge>
+          <CheckButton
+            uploadId={upload.id}
+            onCheckComplete={handleCheckComplete}
+            disabled={entries.length === 0}
+          />
         </section>
       )}
 
-      <section>
-        <WorklogTable entries={entries} isLoading={isLoading} />
+      <section className="mb-8">
+        <WorklogTable entries={entries} isLoading={isLoadingWorklogs} />
       </section>
+
+      {showResults && (
+        <section>
+          <CheckResults summaries={summaries} isLoading={isLoadingResults} />
+        </section>
+      )}
     </div>
   );
 }

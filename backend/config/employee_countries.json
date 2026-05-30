@@ -1,0 +1,15 @@
+{
+  "_comment": "Employee-to-country mapping. Used for production calendar checks. Default country for unknown employees is set in 'default'.",
+  "default": "RU",
+  "employees": {
+    "Василевская Ольга": "BY",
+    "Кевроликина Анастасия": "RU",
+    "Носов Михаил": "RU",
+    "Савельева Мария": "RU",
+    "Тамбовцева Алёна": "KZ",
+    "Токсеитова Ләззат": "KZ",
+    "Фомина Екатерина": "RU",
+    "Хамнаева Тамира": "RU",
+    "Чубукина-Соловей Надежда": "RU"
+  }
+}

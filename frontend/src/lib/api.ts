@@ -51,3 +51,46 @@ export async function getWorklogs(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+
+export interface CheckResult {
+  id: number;
+  upload_id: number;
+  username: string;
+  check_type: string;
+  severity: string;
+  message: string;
+  details: string;
+}
+
+export interface CheckSummary {
+  username: string;
+  total_hours: number;
+  expected_hours: number | null;
+  status: "ok" | "warning" | "error";
+  issues: CheckResult[];
+}
+
+export async function runChecks(uploadId: number): Promise<CheckResult[]> {
+  const res = await fetch(`/api/uploads/${uploadId}/check`, {
+    method: "POST",
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Check failed" }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getResults(
+  uploadId: number,
+  username?: string
+): Promise<CheckSummary[]> {
+  const params = username
+    ? `?username=${encodeURIComponent(username)}`
+    : "";
+  const res = await fetch(`/api/uploads/${uploadId}/results${params}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}

@@ -18,3 +18,4 @@ class Upload(Base):
     status: Mapped[str] = mapped_column(String, default="parsed")
 
     worklogs = relationship("WorklogEntry", back_populates="upload", cascade="all, delete-orphan")
+    check_results = relationship("CheckResult", back_populates="upload", cascade="all, delete-orphan")

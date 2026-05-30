@@ -3,10 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, uploads
+from app.api import checks, health, uploads
 from app.config import settings
 from app.database import Base, engine
-from app.models import Upload, WorklogEntry  # noqa: F401 — ensure models are registered
+from app.models import CheckResult, Upload, WorklogEntry  # noqa: F401 — ensure models are registered
 
 
 @asynccontextmanager
@@ -32,3 +32,4 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(uploads.router)
+app.include_router(checks.router)
