@@ -4,6 +4,7 @@ uvicorn[standard]==0.34.3
 pydantic==2.11.4
 pydantic-settings==2.9.1
 python-dotenv==1.1.0
+python-multipart==0.0.20
 
 # Database
 sqlalchemy==2.0.41
@@ -13,6 +14,7 @@ PyJWT==2.10.1
 
 # Excel import (worklog parsing)
 pandas==2.2.3
+lxml==5.4.0
 
 # Google Docs integration
 google-api-python-client==2.172.0
