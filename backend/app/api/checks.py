@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models.check_result import CheckResult
 from app.models.upload import Upload
 from app.models.worklog import WorklogEntry
@@ -17,22 +19,44 @@ from app.services.calendar import get_expected_hours
 from app.services.checker import run_checks
 from app.services.employee_country import get_country
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/uploads", tags=["checks"])
 
 
-@router.post("/{upload_id}/check", response_model=list[CheckResultResponse])
+def _run_checks_in_background(upload_id: int) -> None:
+    """Execute checks in a background thread with its own DB session."""
+    db = SessionLocal()
+    try:
+        run_checks(upload_id, db)
+    except Exception:
+        logger.exception("Background check failed for upload %d", upload_id)
+        upload = db.query(Upload).filter(Upload.id == upload_id).first()
+        if upload:
+            upload.status = "error"
+            db.commit()
+    finally:
+        db.close()
+
+
+@router.post("/{upload_id}/check")
 def execute_checks(upload_id: int, db: Session = Depends(get_db)):
-    """Run all checks for the upload. Replaces previous results."""
+    """Start checks in the background and return immediately."""
     upload = db.query(Upload).filter(Upload.id == upload_id).first()
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found.")
 
-    try:
-        results = run_checks(upload_id, db)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    upload.status = "checking"
+    db.commit()
 
-    return results
+    thread = threading.Thread(
+        target=_run_checks_in_background,
+        args=(upload_id,),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "checking", "upload_id": upload_id}
 
 
 @router.get("/{upload_id}/results", response_model=list[CheckSummaryItem])

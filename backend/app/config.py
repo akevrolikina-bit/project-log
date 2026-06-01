@@ -21,5 +21,8 @@ class Settings(BaseSettings):
 
     google_credentials_path: str = ""
 
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.vsegpt.ru/v1"
+
 
 settings = Settings()

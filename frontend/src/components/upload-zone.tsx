@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ interface UploadZoneProps {
 }
 
 export function UploadZone({ onUploadComplete }: UploadZoneProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,23 +90,22 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
             </p>
           </div>
 
-          <label>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={isUploading}
-              render={<span />}
-            >
-              Выбрать файл
-            </Button>
-            <input
-              type="file"
-              accept=".xls,.xlsx"
-              className="sr-only"
-              onChange={handleInputChange}
-              disabled={isUploading}
-            />
-          </label>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isUploading}
+            onClick={() => inputRef.current?.click()}
+          >
+            Выбрать файл
+          </Button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".xls,.xlsx"
+            className="sr-only"
+            onChange={handleInputChange}
+            disabled={isUploading}
+          />
 
           {error && (
             <p className="text-xs text-destructive">{error}</p>

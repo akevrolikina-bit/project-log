@@ -1,15 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { PlayCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { runChecks, getResults, type CheckSummary } from "@/lib/api";
+import {
+  runChecks,
+  getResults,
+  getUploadStatus,
+  type CheckSummary,
+} from "@/lib/api";
 
 interface CheckButtonProps {
   uploadId: number;
   onCheckComplete: (summaries: CheckSummary[]) => void;
   disabled?: boolean;
 }
+
+const POLL_INTERVAL_MS = 3_000;
+const POLL_TIMEOUT_MS = 5 * 60_000;
 
 export function CheckButton({
   uploadId,
@@ -18,12 +26,31 @@ export function CheckButton({
 }: CheckButtonProps) {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef(false);
+
+  const pollUntilDone = async (): Promise<void> => {
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      if (abortRef.current) return;
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      if (abortRef.current) return;
+
+      const upload = await getUploadStatus(uploadId);
+      if (upload.status === "checked") return;
+      if (upload.status === "error") throw new Error("Проверка завершилась с ошибкой на сервере");
+    }
+
+    throw new Error("Превышено время ожидания проверки");
+  };
 
   const handleRun = async () => {
     setError(null);
     setIsRunning(true);
+    abortRef.current = false;
     try {
       await runChecks(uploadId);
+      await pollUntilDone();
       const summaries = await getResults(uploadId);
       onCheckComplete(summaries);
     } catch (err) {

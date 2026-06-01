@@ -29,6 +29,10 @@ _DEFAULT_PATH = (
 )
 
 
+COMMENT_RULE_STRICT = "strict"
+COMMENT_RULE_LENIENT = "lenient"
+
+
 @dataclass
 class KeyRule:
     """Rule for a specific Jira key."""
@@ -40,6 +44,7 @@ class KeyRule:
     permitted: bool
     excluded_users: list[str] = field(default_factory=list)
     only_users: list[str] = field(default_factory=list)
+    comment_rule: str = ""
 
 
 @dataclass
@@ -51,6 +56,7 @@ class ProjectTypeRule:
     permitted: bool
     excluded_users: list[str] = field(default_factory=list)
     only_users: list[str] = field(default_factory=list)
+    comment_rule: str = ""
 
 
 @dataclass
@@ -105,6 +111,8 @@ class PermittedTasksRegistry:
     def __init__(self) -> None:
         self._key_rules: dict[str, KeyRule] = {}
         self._pt_rules: dict[tuple[str, str], ProjectTypeRule] = {}
+        self.time_limited_keys: set[str] = set()
+        self.general_rules: list[str] = []
 
     def add_key_rule(self, rule: KeyRule) -> None:
         self._key_rules[rule.key] = rule
@@ -184,6 +192,18 @@ class PermittedTasksRegistry:
 
         return CheckVerdict(permitted=True, reason="OK", rule_type=rule_type)
 
+    def get_comment_rule(self, key: str, project: str, task_type: str) -> str:
+        """Return the comment rule for a task: 'strict', 'lenient', or ''."""
+        kr = self._key_rules.get(key)
+        if kr is not None:
+            return kr.comment_rule
+
+        ptr = self._pt_rules.get((project, task_type))
+        if ptr is not None:
+            return ptr.comment_rule
+
+        return ""
+
     @property
     def key_rules(self) -> dict[str, KeyRule]:
         return dict(self._key_rules)
@@ -191,6 +211,21 @@ class PermittedTasksRegistry:
     @property
     def project_type_rules(self) -> dict[tuple[str, str], ProjectTypeRule]:
         return dict(self._pt_rules)
+
+
+_TIME_LIMITED_KEYS = {"BUH-72900", "BUH-115258"}
+
+
+def _parse_comment_rule(raw: str) -> str:
+    """Classify the comment rule text into a machine-usable constant."""
+    raw = raw.strip().lower()
+    if not raw:
+        return ""
+    if "может не быть" in raw or "может быть комментарий" in raw:
+        return COMMENT_RULE_LENIENT
+    if "не может быть пустым" in raw:
+        return COMMENT_RULE_STRICT
+    return COMMENT_RULE_STRICT
 
 
 def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegistry:
@@ -217,6 +252,7 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
 
     ws = wb[sheet_name]
     registry = PermittedTasksRegistry()
+    registry.time_limited_keys = set(_TIME_LIMITED_KEYS)
 
     for i, row in enumerate(ws.iter_rows(values_only=True)):
         if i < 2:
@@ -229,12 +265,19 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
         title = str(row[4]).strip() if row[4] else ""
         status_raw = str(row[5]).strip().lower() if row[5] else ""
         excl_raw = str(row[6]).strip() if len(row) > 6 and row[6] else ""
+        comment_rule_raw = str(row[7]).strip() if len(row) > 7 and row[7] else ""
 
+        # General rules at the bottom (no status "да"/"нет")
         if status_raw not in ("да", "нет"):
+            if proj and not key and not typ:
+                text = proj.strip()
+                if text and not text.startswith("Project"):
+                    registry.general_rules.append(text)
             continue
 
         permitted = status_raw == "да"
         excluded_users, only_users = _parse_exclusions(excl_raw)
+        comment_rule = _parse_comment_rule(comment_rule_raw)
 
         if key and "-" in key:
             registry.add_key_rule(
@@ -246,6 +289,7 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
                     permitted=permitted,
                     excluded_users=excluded_users,
                     only_users=only_users,
+                    comment_rule=comment_rule,
                 )
             )
         elif proj and typ:
@@ -256,6 +300,7 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
                     permitted=permitted,
                     excluded_users=excluded_users,
                     only_users=only_users,
+                    comment_rule=comment_rule,
                 )
             )
 

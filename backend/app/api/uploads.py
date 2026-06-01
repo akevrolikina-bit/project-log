@@ -54,6 +54,15 @@ def list_uploads(db: Session = Depends(get_db)):
     return db.query(Upload).order_by(Upload.uploaded_at.desc()).all()
 
 
+@router.get("/{upload_id}", response_model=UploadListItem)
+def get_upload(upload_id: int, db: Session = Depends(get_db)):
+    """Return a single upload by ID (used for status polling)."""
+    upload = db.query(Upload).filter(Upload.id == upload_id).first()
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    return upload
+
+
 @router.get("/{upload_id}/worklogs", response_model=list[WorklogEntrySchema])
 def get_worklogs(upload_id: int, username: str | None = None, db: Session = Depends(get_db)):
     """Return worklog entries for an upload, optionally filtered by username."""

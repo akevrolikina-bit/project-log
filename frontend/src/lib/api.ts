@@ -70,7 +70,7 @@ export interface CheckSummary {
   issues: CheckResult[];
 }
 
-export async function runChecks(uploadId: number): Promise<CheckResult[]> {
+export async function runChecks(uploadId: number): Promise<void> {
   const res = await fetch(`/api/uploads/${uploadId}/check`, {
     method: "POST",
   });
@@ -79,7 +79,13 @@ export async function runChecks(uploadId: number): Promise<CheckResult[]> {
     const err = await res.json().catch(() => ({ detail: "Check failed" }));
     throw new Error(err.detail || `HTTP ${res.status}`);
   }
+}
 
+export async function getUploadStatus(
+  uploadId: number
+): Promise<UploadResponse> {
+  const res = await fetch(`/api/uploads/${uploadId}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 

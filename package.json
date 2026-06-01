@@ -6,7 +6,7 @@
     "setup": "npm run setup:backend && npm run setup:frontend",
     "setup:backend": "cd backend && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt",
     "setup:frontend": "cd frontend && npm install",
-    "backend": "cd backend && .venv\\Scripts\\uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "backend": "cd backend && .venv\\Scripts\\uvicorn app.main:app --reload --host 0.0.0.0 --port 8001",
     "frontend": "cd frontend && npm run dev",
     "dev": "concurrently --names BACK,FRONT --prefix-colors blue,magenta \"npm run backend\" \"npm run frontend\""
   },

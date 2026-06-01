@@ -22,3 +22,6 @@ google-auth-oauthlib==1.2.1
 
 # Excel generation
 openpyxl==3.1.5
+
+# AI comment review
+openai>=2.38.0

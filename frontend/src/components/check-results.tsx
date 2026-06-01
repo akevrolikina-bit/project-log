@@ -47,6 +47,10 @@ const STATUS_CONFIG = {
 function checkTypeLabel(type: string): string {
   if (type === "permitted_task") return "Неразрешённая задача";
   if (type === "hours_mismatch") return "Расхождение часов";
+  if (type === "comment_quality") return "Качество комментария";
+  if (type === "comment_relevance") return "Соответствие комментария задаче";
+  if (type === "time_limit") return "Превышение лимита времени";
+  if (type === "general_rules") return "Общие правила списания";
   return type;
 }
 
