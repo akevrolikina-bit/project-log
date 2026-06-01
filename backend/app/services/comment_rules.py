@@ -17,6 +17,12 @@ _DEFAULT_JIRA_PATTERNS: list[re.Pattern[str]] = [
 
 _MIN_MEANINGFUL_LENGTH = 10
 
+_SHORT_COMMENT_ALLOWED: dict[str, list[re.Pattern[str]]] = {
+    "BUH-115258": [re.compile(r"почт", re.IGNORECASE)],
+    "BUH-115259": [re.compile(r"статус", re.IGNORECASE)],
+    "GENERAL-121": [re.compile(r"отгул", re.IGNORECASE)],
+}
+
 
 @dataclass
 class CommentIssue:
@@ -26,6 +32,14 @@ class CommentIssue:
 
 def _normalize(text: str) -> str:
     return " ".join(text.split()).strip()
+
+
+def _short_comment_allowed(key: str, text: str) -> bool:
+    """Return True when a short comment is acceptable for the given task key."""
+    patterns = _SHORT_COMMENT_ALLOWED.get(key)
+    if not patterns:
+        return False
+    return any(p.search(text) for p in patterns)
 
 
 def check_comment_quality(
@@ -60,7 +74,7 @@ def check_comment_quality(
     for pat in _DEFAULT_JIRA_PATTERNS:
         if pat.match(clean):
             issues.append(CommentIssue(
-                severity="warning",
+                severity="error",
                 reason=(
                     f"Стандартный комментарий Jira к задаче {key}: "
                     f"«{clean}»"
@@ -68,9 +82,9 @@ def check_comment_quality(
             ))
             return issues
 
-    if len(clean) < _MIN_MEANINGFUL_LENGTH:
+    if len(clean) < _MIN_MEANINGFUL_LENGTH and not _short_comment_allowed(key, clean):
         issues.append(CommentIssue(
-            severity="warning",
+            severity="error",
             reason=(
                 f"Слишком короткий комментарий ({len(clean)} симв.) "
                 f"к задаче {key}: «{clean}»"
@@ -80,7 +94,7 @@ def check_comment_quality(
     clean_title = _normalize(title)
     if clean_title and clean.lower() == clean_title.lower():
         issues.append(CommentIssue(
-            severity="warning",
+            severity="error",
             reason=(
                 f"Комментарий совпадает с названием задачи {key}: "
                 f"«{clean}»"

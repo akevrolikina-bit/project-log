@@ -74,6 +74,68 @@ function StatusBadge({ status }: { status: CheckSummary["status"] }) {
   );
 }
 
+interface CommentDetail {
+  key: string;
+  hours: number;
+  comment?: string;
+  title?: string;
+  severity?: string;
+  reason?: string;
+  verdict?: string;
+  explanation?: string;
+}
+
+function IssueDetails({ issue }: { issue: CheckResult }) {
+  if (
+    issue.check_type !== "comment_quality" &&
+    issue.check_type !== "comment_relevance" &&
+    issue.check_type !== "general_rules"
+  ) {
+    return null;
+  }
+
+  let items: CommentDetail[];
+  try {
+    items = JSON.parse(issue.details);
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(items) || items.length === 0) return null;
+
+  return (
+    <ul className="mt-2 space-y-1.5 border-t pt-2">
+      {items.map((item, idx) => {
+        const description =
+          item.reason || item.explanation || "Нет описания";
+        const verdictColor =
+          (item.severity === "error" || item.verdict === "red")
+            ? "text-[var(--error)]"
+            : "text-[var(--warning)]";
+
+        return (
+          <li key={idx} className="flex flex-col gap-0.5 text-xs">
+            <div className="flex items-baseline gap-2">
+              <span className="font-mono font-medium">{item.key}</span>
+              <span className="text-muted-foreground">
+                {item.hours.toFixed(1)} ч
+              </span>
+              <span className={cn("font-medium", verdictColor)}>
+                {description}
+              </span>
+            </div>
+            {(item.comment || item.title) && (
+              <span className="ml-4 text-muted-foreground italic">
+                «{item.comment || item.title}»
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function EmployeeRow({ summary }: { summary: CheckSummary }) {
   const [expanded, setExpanded] = useState(false);
   const config = STATUS_CONFIG[summary.status];
@@ -157,6 +219,7 @@ function EmployeeRow({ summary }: { summary: CheckSummary }) {
                     </span>
                   </div>
                   <p className="mt-1">{issue.message}</p>
+                  <IssueDetails issue={issue} />
                 </li>
               ))}
             </ul>

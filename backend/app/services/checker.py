@@ -181,12 +181,7 @@ def run_checks(
         error_count = sum(1 for i in items if i["severity"] == "error")
         warning_count = sum(1 for i in items if i["severity"] == "warning")
         worst_severity = "error" if error_count > 0 else "warning"
-
-        parts: list[str] = []
-        if error_count:
-            parts.append(f"{error_count} пустых")
-        if warning_count:
-            parts.append(f"{warning_count} сомнительных")
+        total_issues = error_count + warning_count
 
         results.append(
             CheckResult(
@@ -194,7 +189,7 @@ def run_checks(
                 username=username,
                 check_type="comment_quality",
                 severity=worst_severity,
-                message=f"Проблемы с комментариями: {', '.join(parts)}",
+                message=f"Проблемы с комментариями: {total_issues} ошибок",
                 details=json.dumps(items, ensure_ascii=False),
             )
         )
@@ -369,10 +364,10 @@ def run_checks(
                 upload_id=upload_id,
                 username=username,
                 check_type="general_rules",
-                severity="warning",
+                severity="error",
                 message=(
                     f"Нарушение общих правил списания: "
-                    f"{len(items)} записей"
+                    f"{len(items)} ошибок"
                 ),
                 details=json.dumps(items, ensure_ascii=False),
             )
