@@ -120,12 +120,14 @@ def run_checks(
                     f"(дельта {diff:+.1f} ч)"
                 )
 
+            severity = "error" if diff < 0 else "warning"
+
             results.append(
                 CheckResult(
                     upload_id=upload_id,
                     username=username,
                     check_type="hours_mismatch",
-                    severity="warning",
+                    severity=severity,
                     message=message,
                     details=json.dumps(
                         {
