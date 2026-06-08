@@ -5,6 +5,7 @@ import { UploadZone } from "@/components/upload-zone";
 import { WorklogTable } from "@/components/worklog-table";
 import { CheckButton } from "@/components/check-button";
 import { CheckResults } from "@/components/check-results";
+import { InvestPanel } from "@/components/invest-panel";
 import { Badge } from "@/components/ui/badge";
 import { DownloadButton } from "@/components/download-button";
 import {
@@ -107,6 +108,12 @@ export default function Home() {
       {showResults && (
         <section>
           <CheckResults summaries={summaries} isLoading={isLoadingResults} />
+        </section>
+      )}
+
+      {upload && upload.status === "checked" && (
+        <section className="mt-8">
+          <InvestPanel uploadId={upload.id} />
         </section>
       )}
     </div>

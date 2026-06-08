@@ -25,12 +25,17 @@ from pathlib import Path
 import openpyxl
 
 _DEFAULT_PATH = (
-    Path(__file__).resolve().parents[3] / "data" / "input" / "Issues CHANGE (1).xlsx"
+    Path(__file__).resolve().parents[3] / "data" / "input" / "Issues CHANGE (2).xlsx"
 )
 
 
 COMMENT_RULE_STRICT = "strict"
 COMMENT_RULE_LENIENT = "lenient"
+
+INVEST_AUTO = "auto"
+INVEST_MANUAL_PERCENT = "manual_percent"
+INVEST_MANUAL_PROJECT = "manual_project"
+INVEST_BUH_COMPANY = "buh_company"
 
 
 @dataclass
@@ -45,6 +50,8 @@ class KeyRule:
     excluded_users: list[str] = field(default_factory=list)
     only_users: list[str] = field(default_factory=list)
     comment_rule: str = ""
+    invest_direction: str = ""
+    invest_allocation: str = ""
 
 
 @dataclass
@@ -57,6 +64,8 @@ class ProjectTypeRule:
     excluded_users: list[str] = field(default_factory=list)
     only_users: list[str] = field(default_factory=list)
     comment_rule: str = ""
+    invest_direction: str = ""
+    invest_allocation: str = ""
 
 
 @dataclass
@@ -192,6 +201,24 @@ class PermittedTasksRegistry:
 
         return CheckVerdict(permitted=True, reason="OK", rule_type=rule_type)
 
+    def get_invest_info(
+        self, key: str, project: str, task_type: str
+    ) -> tuple[str, str] | None:
+        """Return (invest_direction, invest_allocation) or None.
+
+        Lookup order mirrors ``check()``: key rule first, then project+type.
+        Returns None when the matched rule has no invest data.
+        """
+        kr = self._key_rules.get(key)
+        if kr is not None and kr.invest_direction:
+            return kr.invest_direction, kr.invest_allocation
+
+        ptr = self._pt_rules.get((project, task_type))
+        if ptr is not None and ptr.invest_direction:
+            return ptr.invest_direction, ptr.invest_allocation
+
+        return None
+
     def get_comment_rule(self, key: str, project: str, task_type: str) -> str:
         """Return the comment rule for a task: 'strict', 'lenient', or ''."""
         kr = self._key_rules.get(key)
@@ -216,6 +243,21 @@ class PermittedTasksRegistry:
 _TIME_LIMITED_KEYS = {"BUH-72900", "BUH-115258"}
 
 
+_INVEST_ALLOC_MAP = {
+    "руками, задавая процент": INVEST_MANUAL_PERCENT,
+    "руками": INVEST_MANUAL_PROJECT,
+    "по buh company из дополнительной выгрузки": INVEST_BUH_COMPANY,
+}
+
+
+def _normalize_invest_allocation(raw: str, invest_direction: str) -> str:
+    """Map the raw invest allocation text to one of the INVEST_* constants."""
+    raw_lower = raw.strip().lower()
+    if not raw_lower:
+        return INVEST_AUTO if invest_direction else ""
+    return _INVEST_ALLOC_MAP.get(raw_lower, raw.strip())
+
+
 def _parse_comment_rule(raw: str) -> str:
     """Classify the comment rule text into a machine-usable constant."""
     raw = raw.strip().lower()
@@ -234,7 +276,7 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
     Parameters
     ----------
     path : path to the .xlsx file.  Defaults to
-           ``data/input/Issues CHANGE (1).xlsx`` relative to project root.
+           ``data/input/Issues CHANGE (2).xlsx`` relative to project root.
            Can also be set via ``PERMITTED_TASKS_PATH`` env var.
     """
     if path is None:
@@ -266,8 +308,9 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
         status_raw = str(row[5]).strip().lower() if row[5] else ""
         excl_raw = str(row[6]).strip() if len(row) > 6 and row[6] else ""
         comment_rule_raw = str(row[7]).strip() if len(row) > 7 and row[7] else ""
+        invest_dir_raw = str(row[8]).strip() if len(row) > 8 and row[8] else ""
+        invest_alloc_raw = str(row[9]).strip() if len(row) > 9 and row[9] else ""
 
-        # General rules at the bottom (no status "да"/"нет")
         if status_raw not in ("да", "нет"):
             if proj and not key and not typ:
                 text = proj.strip()
@@ -278,6 +321,10 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
         permitted = status_raw == "да"
         excluded_users, only_users = _parse_exclusions(excl_raw)
         comment_rule = _parse_comment_rule(comment_rule_raw)
+        invest_direction = invest_dir_raw
+        invest_allocation = _normalize_invest_allocation(
+            invest_alloc_raw, invest_direction
+        )
 
         if key and "-" in key:
             registry.add_key_rule(
@@ -290,6 +337,8 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
                     excluded_users=excluded_users,
                     only_users=only_users,
                     comment_rule=comment_rule,
+                    invest_direction=invest_direction,
+                    invest_allocation=invest_allocation,
                 )
             )
         elif proj and typ:
@@ -301,6 +350,8 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
                     excluded_users=excluded_users,
                     only_users=only_users,
                     comment_rule=comment_rule,
+                    invest_direction=invest_direction,
+                    invest_allocation=invest_allocation,
                 )
             )
 

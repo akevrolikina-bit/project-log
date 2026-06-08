@@ -104,3 +104,137 @@ export async function getResults(
 export function getReportUrl(uploadId: number): string {
   return `/api/uploads/${uploadId}/report`;
 }
+
+// ---------------------------------------------------------------------------
+// Invest allocation types
+// ---------------------------------------------------------------------------
+
+export interface InvestEmployee {
+  username: string;
+  total_hours: number;
+  has_invest_tasks: boolean;
+  selected: boolean;
+}
+
+export interface AutoEntry {
+  username: string;
+  task_key: string;
+  title: string;
+  hours: number;
+  invest_project: string;
+}
+
+export interface BuhEntry {
+  username: string;
+  task_key: string;
+  title: string;
+  hours: number;
+  buh_company: string | null;
+  invest_project: string | null;
+}
+
+export interface ManualPercentEntry {
+  username: string;
+  task_key: string;
+  title: string;
+  hours: number;
+  invest_project: string | null;
+  percentage: number | null;
+}
+
+export interface ManualProjectEntry {
+  username: string;
+  task_key: string;
+  title: string;
+  hours: number;
+  invest_project: string | null;
+}
+
+export interface SavedAllocation {
+  username: string;
+  task_key: string;
+  invest_project: string;
+  percentage: number;
+  allocation_type: string;
+}
+
+export interface InvestData {
+  auto_entries: AutoEntry[];
+  buh_entries: BuhEntry[];
+  manual_percent_entries: ManualPercentEntry[];
+  manual_project_entries: ManualProjectEntry[];
+  saved_allocations: SavedAllocation[];
+  invest_projects: string[];
+}
+
+export interface BuhCsvResult {
+  total_keys: number;
+  matched_keys: number;
+  unmatched_keys: number;
+}
+
+export interface AllocationEntry {
+  username: string;
+  task_key: string;
+  invest_project: string;
+  percentage: number;
+  allocation_type: string;
+}
+
+// ---------------------------------------------------------------------------
+// Invest allocation API
+// ---------------------------------------------------------------------------
+
+export async function getInvestEmployees(
+  uploadId: number
+): Promise<InvestEmployee[]> {
+  const res = await fetch(`/api/uploads/${uploadId}/invest/employees`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function saveInvestEmployees(
+  uploadId: number,
+  usernames: string[]
+): Promise<void> {
+  const res = await fetch(`/api/uploads/${uploadId}/invest/employees`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ usernames }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function uploadBuhCsv(
+  uploadId: number,
+  files: File[]
+): Promise<BuhCsvResult> {
+  const formData = new FormData();
+  for (const f of files) {
+    formData.append("files", f);
+  }
+  const res = await fetch(`/api/uploads/${uploadId}/invest/buh-csv`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function getInvestData(uploadId: number): Promise<InvestData> {
+  const res = await fetch(`/api/uploads/${uploadId}/invest`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function saveInvestAllocations(
+  uploadId: number,
+  allocations: AllocationEntry[]
+): Promise<void> {
+  const res = await fetch(`/api/uploads/${uploadId}/invest`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ allocations }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}

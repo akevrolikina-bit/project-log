@@ -1,6 +1,6 @@
 """Generate an Excel (.xlsx) report.
 
-Sheets: Сводка, Распределение, Ошибки, Недобор часов.
+Sheets: Сводка, Распределение, Инвест-направления, Ошибки, Недобор часов.
 Styled according to docs/brandbook.html.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -24,9 +25,21 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
 from app.models.check_result import CheckResult
+from app.models.invest_allocation import (
+    BuhCompanyMapping,
+    InvestAllocation,
+    InvestEmployeeSelection,
+)
 from app.models.worklog import WorklogEntry
 from app.services.calendar import get_expected_hours
 from app.services.employee_country import get_country
+from app.services.permitted_tasks import (
+    INVEST_AUTO,
+    INVEST_BUH_COMPANY,
+    INVEST_MANUAL_PERCENT,
+    INVEST_MANUAL_PROJECT,
+    load_permitted_tasks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +73,13 @@ _FONT_WARNING = Font(name="Calibri", bold=True, size=10, color=_CLR_WARNING)
 _FONT_ERROR = Font(name="Calibri", bold=True, size=10, color=_CLR_ERROR)
 _FONT_LABEL = Font(name="Calibri", size=10, color=_CLR_TEXT_SECONDARY)
 
+_CLR_ACCENT_LIGHT = "EFF6FF"
+
 _FILL_TABLE_HEADER = PatternFill(start_color=_CLR_BG_SECONDARY, end_color=_CLR_BG_SECONDARY, fill_type="solid")
 _FILL_SUCCESS = PatternFill(start_color=_CLR_SUCCESS_LIGHT, end_color=_CLR_SUCCESS_LIGHT, fill_type="solid")
 _FILL_WARNING = PatternFill(start_color=_CLR_WARNING_LIGHT, end_color=_CLR_WARNING_LIGHT, fill_type="solid")
 _FILL_ERROR = PatternFill(start_color=_CLR_ERROR_LIGHT, end_color=_CLR_ERROR_LIGHT, fill_type="solid")
+_FILL_ACCENT = PatternFill(start_color=_CLR_ACCENT_LIGHT, end_color=_CLR_ACCENT_LIGHT, fill_type="solid")
 
 _ALIGN_LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
 _ALIGN_CENTER = Alignment(horizontal="center", vertical="center")
@@ -607,13 +623,424 @@ def _build_underlogged_sheet(
 
 
 # ---------------------------------------------------------------------------
+# Invest directions sheet builder ("Инвест-направления")
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _AutoRow:
+    username: str
+    task_key: str
+    title: str
+    hours: float
+    invest_project: str
+
+
+@dataclass
+class _BuhRow:
+    username: str
+    task_key: str
+    title: str
+    hours: float
+    buh_company: str
+    invest_project: str | None
+    manual_assigned: bool = False
+
+
+@dataclass
+class _ManualRow:
+    username: str
+    task_key: str
+    title: str
+    hours: float
+    percentage: float | None
+    invest_project: str | None
+    allocation_type: str
+
+
+def _build_invest_sheet(
+    ws,
+    worklogs: list[WorklogEntry],
+    upload_id: int,
+    db: Session,
+) -> None:
+    """Build the 'Инвест-направления' sheet with 4 sections."""
+
+    selected_rows = (
+        db.query(InvestEmployeeSelection)
+        .filter(InvestEmployeeSelection.upload_id == upload_id)
+        .all()
+    )
+    selected_users = {r.username for r in selected_rows}
+
+    if not selected_users:
+        ws.cell(row=1, column=1, value="Инвест-направления").style = "ta_header"
+        ws.cell(row=3, column=1, value="Сотрудники не выбраны").font = _FONT_LABEL
+        return
+
+    registry = load_permitted_tasks()
+
+    buh_mapping_rows = (
+        db.query(BuhCompanyMapping)
+        .filter(BuhCompanyMapping.upload_id == upload_id)
+        .all()
+    )
+    buh_map: dict[str, BuhCompanyMapping] = {r.task_key: r for r in buh_mapping_rows}
+
+    saved_alloc_rows = (
+        db.query(InvestAllocation)
+        .filter(InvestAllocation.upload_id == upload_id)
+        .all()
+    )
+    saved_alloc: dict[tuple[str, str], InvestAllocation] = {
+        (r.username, r.task_key): r for r in saved_alloc_rows
+    }
+
+    auto_agg: dict[tuple[str, str], _AutoRow] = {}
+    buh_agg: dict[tuple[str, str], _BuhRow] = {}
+    manual_agg: dict[tuple[str, str], _ManualRow] = {}
+
+    user_worklogs = [wl for wl in worklogs if wl.username in selected_users]
+
+    for wl in user_worklogs:
+        info = registry.get_invest_info(wl.key, wl.project, wl.task_type)
+        if info is None:
+            continue
+
+        direction, alloc_type = info
+        k = (wl.username, wl.key)
+
+        if alloc_type == INVEST_AUTO:
+            if k in auto_agg:
+                auto_agg[k].hours += wl.hours
+            else:
+                auto_agg[k] = _AutoRow(
+                    username=wl.username,
+                    task_key=wl.key,
+                    title=wl.title,
+                    hours=wl.hours,
+                    invest_project=direction,
+                )
+
+        elif alloc_type == INVEST_BUH_COMPANY:
+            buh_entry = buh_map.get(wl.key)
+            if buh_entry and buh_entry.invest_project:
+                if k in buh_agg:
+                    buh_agg[k].hours += wl.hours
+                else:
+                    buh_agg[k] = _BuhRow(
+                        username=wl.username,
+                        task_key=wl.key,
+                        title=wl.title,
+                        hours=wl.hours,
+                        buh_company=buh_entry.buh_company,
+                        invest_project=buh_entry.invest_project,
+                    )
+            else:
+                sa = saved_alloc.get(k)
+                if k in buh_agg:
+                    buh_agg[k].hours += wl.hours
+                else:
+                    buh_agg[k] = _BuhRow(
+                        username=wl.username,
+                        task_key=wl.key,
+                        title=wl.title,
+                        hours=wl.hours,
+                        buh_company=buh_entry.buh_company if buh_entry else "",
+                        invest_project=sa.invest_project if sa else None,
+                        manual_assigned=sa is not None,
+                    )
+
+        elif alloc_type == INVEST_MANUAL_PERCENT:
+            sa = saved_alloc.get(k)
+            if k in manual_agg:
+                manual_agg[k].hours += wl.hours
+            else:
+                manual_agg[k] = _ManualRow(
+                    username=wl.username,
+                    task_key=wl.key,
+                    title=wl.title,
+                    hours=wl.hours,
+                    percentage=sa.percentage if sa else None,
+                    invest_project=sa.invest_project if sa else None,
+                    allocation_type="manual_percent",
+                )
+
+        elif alloc_type == INVEST_MANUAL_PROJECT:
+            sa = saved_alloc.get(k)
+            if k in manual_agg:
+                manual_agg[k].hours += wl.hours
+            else:
+                manual_agg[k] = _ManualRow(
+                    username=wl.username,
+                    task_key=wl.key,
+                    title=wl.title,
+                    hours=wl.hours,
+                    percentage=100.0 if sa else None,
+                    invest_project=sa.invest_project if sa else None,
+                    allocation_type="manual_project",
+                )
+
+    auto_rows = sorted(auto_agg.values(), key=lambda r: (r.username, r.task_key))
+    buh_rows = sorted(buh_agg.values(), key=lambda r: (r.username, r.task_key))
+    manual_rows = sorted(manual_agg.values(), key=lambda r: (r.username, r.task_key))
+
+    # --- Compute summary totals per invest project ---
+    summary: dict[str, dict[str, float]] = defaultdict(lambda: {
+        "auto": 0.0, "buh": 0.0, "manual": 0.0,
+    })
+
+    for r in auto_rows:
+        summary[r.invest_project]["auto"] += r.hours
+
+    for r in buh_rows:
+        if r.invest_project:
+            summary[r.invest_project]["buh"] += r.hours
+
+    for r in manual_rows:
+        if r.invest_project and r.percentage is not None:
+            invest_hours = r.hours * r.percentage / 100.0
+            summary[r.invest_project]["manual"] += invest_hours
+
+    # --- Write the sheet ---
+    ws.cell(row=1, column=1, value="Инвест-направления").style = "ta_header"
+    current_row = 3
+
+    # === SECTION 1: Summary table ===
+    ws.cell(row=current_row, column=1, value="Сводка по инвест-проектам").style = "ta_subheader"
+    current_row += 1
+
+    sum_headers = [
+        "Инвест-проект", "Авто (ч)", "По BUH company (ч)",
+        "Ручное распределение (ч)", "Итого (ч)",
+    ]
+    _write_row(ws, current_row, sum_headers, style="ta_table_header")
+    sum_header_row = current_row
+    current_row += 1
+
+    grand_auto = grand_buh = grand_manual = grand_total = 0.0
+    for proj_name in sorted(summary.keys()):
+        s = summary[proj_name]
+        total = s["auto"] + s["buh"] + s["manual"]
+        _write_row(ws, current_row, [
+            proj_name,
+            round(s["auto"], 2),
+            round(s["buh"], 2),
+            round(s["manual"], 2),
+            round(total, 2),
+        ], style="ta_data")
+        for col in (2, 3, 4, 5):
+            ws.cell(row=current_row, column=col).style = "ta_mono"
+        grand_auto += s["auto"]
+        grand_buh += s["buh"]
+        grand_manual += s["manual"]
+        grand_total += total
+        current_row += 1
+
+    ws.cell(row=current_row, column=1, value="Итого").font = _FONT_SUBHEADER
+    for col, val in [(2, grand_auto), (3, grand_buh), (4, grand_manual), (5, grand_total)]:
+        cell = ws.cell(row=current_row, column=col, value=round(val, 2))
+        cell.style = "ta_mono"
+        cell.font = _FONT_SUBHEADER
+    current_row += 2
+
+    # === SECTION 1b: Summary by employee ===
+    ws.cell(row=current_row, column=1, value="Итого по сотрудникам").style = "ta_subheader"
+    current_row += 1
+
+    emp_sum_headers = [
+        "Сотрудник", "Авто (ч)", "По BUH company (ч)",
+        "Ручное распределение (ч)", "Итого (ч)",
+    ]
+    _write_row(ws, current_row, emp_sum_headers, style="ta_table_header")
+    current_row += 1
+
+    emp_summary: dict[str, dict[str, float]] = defaultdict(lambda: {
+        "auto": 0.0, "buh": 0.0, "manual": 0.0,
+    })
+
+    for r in auto_rows:
+        emp_summary[r.username]["auto"] += r.hours
+
+    for r in buh_rows:
+        if r.invest_project:
+            emp_summary[r.username]["buh"] += r.hours
+
+    for r in manual_rows:
+        if r.invest_project and r.percentage is not None:
+            emp_summary[r.username]["manual"] += r.hours * r.percentage / 100.0
+
+    emp_grand_auto = emp_grand_buh = emp_grand_manual = emp_grand_total = 0.0
+    for uname in sorted(emp_summary.keys()):
+        s = emp_summary[uname]
+        total = s["auto"] + s["buh"] + s["manual"]
+        _write_row(ws, current_row, [
+            uname,
+            round(s["auto"], 2),
+            round(s["buh"], 2),
+            round(s["manual"], 2),
+            round(total, 2),
+        ], style="ta_data")
+        for col in (2, 3, 4, 5):
+            ws.cell(row=current_row, column=col).style = "ta_mono"
+        emp_grand_auto += s["auto"]
+        emp_grand_buh += s["buh"]
+        emp_grand_manual += s["manual"]
+        emp_grand_total += total
+        current_row += 1
+
+    ws.cell(row=current_row, column=1, value="Итого").font = _FONT_SUBHEADER
+    for col, val in [
+        (2, emp_grand_auto), (3, emp_grand_buh),
+        (4, emp_grand_manual), (5, emp_grand_total),
+    ]:
+        cell = ws.cell(row=current_row, column=col, value=round(val, 2))
+        cell.style = "ta_mono"
+        cell.font = _FONT_SUBHEADER
+    current_row += 2
+
+    # === SECTION 2: Auto-allocated entries (Type 1) ===
+    ws.cell(row=current_row, column=1, value="Автоматическое распределение (100% инвест)").style = "ta_subheader"
+    current_row += 1
+
+    auto_headers = ["Сотрудник", "Ключ", "Название задачи", "Часы", "Инвест-проект"]
+    _write_row(ws, current_row, auto_headers, style="ta_table_header")
+    auto_header_row = current_row
+    current_row += 1
+
+    auto_subtotal = 0.0
+    if auto_rows:
+        for r in auto_rows:
+            _write_row(ws, current_row, [
+                r.username, r.task_key, r.title,
+                round(r.hours, 2), r.invest_project,
+            ], style="ta_data")
+            ws.cell(row=current_row, column=2).style = "ta_mono"
+            ws.cell(row=current_row, column=4).style = "ta_mono"
+            auto_subtotal += r.hours
+            current_row += 1
+    else:
+        ws.cell(row=current_row, column=1, value="Нет записей").font = _FONT_LABEL
+        current_row += 1
+
+    ws.cell(row=current_row, column=3, value="Итого").font = _FONT_SUBHEADER
+    cell = ws.cell(row=current_row, column=4, value=round(auto_subtotal, 2))
+    cell.style = "ta_mono"
+    cell.font = _FONT_SUBHEADER
+    current_row += 2
+
+    # === SECTION 3: BUH company entries (Type 4) ===
+    ws.cell(row=current_row, column=1, value="Распределение по BUH Company").style = "ta_subheader"
+    current_row += 1
+
+    buh_headers = [
+        "Сотрудник", "Ключ", "Название задачи", "Часы",
+        "BUH Company", "Инвест-проект",
+    ]
+    _write_row(ws, current_row, buh_headers, style="ta_table_header")
+    buh_header_row = current_row
+    current_row += 1
+
+    buh_subtotal = 0.0
+    if buh_rows:
+        for r in buh_rows:
+            proj_display = r.invest_project if r.invest_project else "Не задано"
+            _write_row(ws, current_row, [
+                r.username, r.task_key, r.title,
+                round(r.hours, 2), r.buh_company, proj_display,
+            ], style="ta_data")
+            ws.cell(row=current_row, column=2).style = "ta_mono"
+            ws.cell(row=current_row, column=4).style = "ta_mono"
+
+            if r.invest_project and not r.manual_assigned:
+                for col in range(1, 7):
+                    ws.cell(row=current_row, column=col).fill = _FILL_SUCCESS
+            elif r.invest_project and r.manual_assigned:
+                for col in range(1, 7):
+                    ws.cell(row=current_row, column=col).fill = _FILL_ACCENT
+            else:
+                for col in range(1, 7):
+                    ws.cell(row=current_row, column=col).fill = _FILL_WARNING
+
+            if r.invest_project:
+                buh_subtotal += r.hours
+            current_row += 1
+    else:
+        ws.cell(row=current_row, column=1, value="Нет записей").font = _FONT_LABEL
+        current_row += 1
+
+    ws.cell(row=current_row, column=3, value="Итого").font = _FONT_SUBHEADER
+    cell = ws.cell(row=current_row, column=4, value=round(buh_subtotal, 2))
+    cell.style = "ta_mono"
+    cell.font = _FONT_SUBHEADER
+    current_row += 2
+
+    # === SECTION 4: Manual allocations (Types 2, 3) ===
+    ws.cell(row=current_row, column=1, value="Ручное распределение").style = "ta_subheader"
+    current_row += 1
+
+    manual_headers = [
+        "Сотрудник", "Ключ", "Название задачи", "Часы",
+        "Процент", "Инвест-часы", "Инвест-проект",
+    ]
+    _write_row(ws, current_row, manual_headers, style="ta_table_header")
+    manual_header_row = current_row
+    current_row += 1
+
+    manual_subtotal = 0.0
+    if manual_rows:
+        for r in manual_rows:
+            pct = r.percentage if r.percentage is not None else 0.0
+            invest_hrs = round(r.hours * pct / 100.0, 2) if r.percentage is not None else 0.0
+            proj_display = r.invest_project if r.invest_project else "Не задано"
+
+            _write_row(ws, current_row, [
+                r.username, r.task_key, r.title,
+                round(r.hours, 2),
+                f"{pct:.0f}%" if r.percentage is not None else "—",
+                invest_hrs,
+                proj_display,
+            ], style="ta_data")
+            ws.cell(row=current_row, column=2).style = "ta_mono"
+            ws.cell(row=current_row, column=4).style = "ta_mono"
+            ws.cell(row=current_row, column=5).style = "ta_mono"
+            ws.cell(row=current_row, column=6).style = "ta_mono"
+
+            if r.invest_project is None or r.percentage is None:
+                for col in range(1, 8):
+                    ws.cell(row=current_row, column=col).fill = _FILL_WARNING
+
+            manual_subtotal += invest_hrs
+            current_row += 1
+    else:
+        ws.cell(row=current_row, column=1, value="Нет записей").font = _FONT_LABEL
+        current_row += 1
+
+    ws.cell(row=current_row, column=5, value="Итого").font = _FONT_SUBHEADER
+    cell = ws.cell(row=current_row, column=6, value=round(manual_subtotal, 2))
+    cell.style = "ta_mono"
+    cell.font = _FONT_SUBHEADER
+
+    ws.freeze_panes = ws.cell(row=sum_header_row + 1, column=1).coordinate
+
+    _set_column_widths(ws, {
+        1: 36,   # Сотрудник / Инвест-проект
+        2: 20,   # Ключ
+        3: 50,   # Название задачи
+        4: 16,   # Часы
+        5: 26,   # BUH Company / Процент
+        6: 22,   # Инвест-проект / Инвест-часы
+        7: 22,   # Инвест-проект (section 4)
+    })
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def generate_report(upload_id: int, db: Session) -> bytes:
     """Build an openpyxl Workbook and return .xlsx bytes.
 
-    Sheets: Сводка, Распределение, Ошибки, Недобор часов.
+    Sheets: Сводка, Распределение, Инвест-направления, Ошибки, Недобор часов.
     """
 
     worklogs: list[WorklogEntry] = (
@@ -655,16 +1082,20 @@ def generate_report(upload_id: int, db: Session) -> bytes:
     ws_distribution = wb.create_sheet(title="Распределение")
     _build_distribution_sheet(ws_distribution, wl_by_user)
 
-    # 3) Consolidated errors sheet
+    # 3) Invest directions sheet — third
+    ws_invest = wb.create_sheet(title="Инвест-направления")
+    _build_invest_sheet(ws_invest, worklogs, upload_id, db)
+
+    # 4) Consolidated errors sheet
     ws_errors = wb.create_sheet(title="Ошибки")
     _build_errors_sheet(ws_errors, check_results, worklogs)
 
-    # 4) Under-logged hours sheet (hours_mismatch with negative diff)
+    # 5) Under-logged hours sheet (hours_mismatch with negative diff)
     ws_underlogged = wb.create_sheet(title="Недобор часов")
     _build_underlogged_sheet(ws_underlogged, check_results)
 
     logger.info(
-        "Report generated for upload %d: 4 sheets, %d check results",
+        "Report generated for upload %d: 5 sheets, %d check results",
         upload_id,
         len(check_results),
     )

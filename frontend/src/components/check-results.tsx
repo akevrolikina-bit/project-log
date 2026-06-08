@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import type { CheckSummary } from "@/lib/api";
+import type { CheckResult, CheckSummary } from "@/lib/api";
 
 interface CheckResultsProps {
   summaries: CheckSummary[];
