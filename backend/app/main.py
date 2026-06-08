@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s - %(message)s")
 
-from app.api import checks, health, uploads
+from app.api import checks, health, reports, uploads
 from app.config import settings
 from app.database import Base, engine
 from app.models import CheckResult, Upload, WorklogEntry  # noqa: F401 — ensure models are registered
@@ -36,3 +36,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(uploads.router)
 app.include_router(checks.router)
+app.include_router(reports.router)

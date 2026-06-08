@@ -100,3 +100,7 @@ export async function getResults(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+
+export function getReportUrl(uploadId: number): string {
+  return `/api/uploads/${uploadId}/report`;
+}

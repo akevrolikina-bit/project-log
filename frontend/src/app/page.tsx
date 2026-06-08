@@ -6,6 +6,7 @@ import { WorklogTable } from "@/components/worklog-table";
 import { CheckButton } from "@/components/check-button";
 import { CheckResults } from "@/components/check-results";
 import { Badge } from "@/components/ui/badge";
+import { DownloadButton } from "@/components/download-button";
 import {
   getWorklogs,
   getResults,
@@ -93,6 +94,9 @@ export default function Home() {
             onCheckComplete={handleCheckComplete}
             disabled={entries.length === 0}
           />
+          {upload.status === "checked" && (
+            <DownloadButton uploadId={upload.id} />
+          )}
         </section>
       )}
 
