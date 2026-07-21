@@ -40,6 +40,7 @@ UI: **http://localhost:3000**
 
 ## Documentation
 
+- [User guide (Russian)](docs/user-guide.md)
 - [Product strategy](docs/product.md)
 - [Technology stack](docs/tech.md)
 - [Design system](docs/brandbook.html)
