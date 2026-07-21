@@ -415,8 +415,13 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
     for sa in saved_alloc_rows:
         invest_projects_set.add(sa.invest_project)
 
+    # Always offer concrete directions from the rules file (MENA, Alphyn, …)
+    # so manual % / project pickers can target them even when no auto rows
+    # for that direction appear in the current selection.
+    invest_projects_set.update(registry.list_concrete_invest_directions())
+
     invest_projects_set = {
-        p for p in invest_projects_set if "/" not in p
+        p for p in invest_projects_set if p and "/" not in p
     }
     if not invest_projects_set:
         invest_projects_set.add("MENA")

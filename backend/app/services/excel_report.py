@@ -1,6 +1,7 @@
 """Generate an Excel (.xlsx) report.
 
-Sheets: Сводка, Распределение, Инвест-направления, Ошибки, Недобор часов.
+Sheets: Сводка, Распределение, Инвест-направления, Простои GENERAL-122,
+Ошибки, Недобор часов.
 Styled according to docs/brandbook.html.
 """
 
@@ -98,6 +99,10 @@ _COUNTRY_LABELS: dict[str, str] = {
     "KZ": "Казахстан",
     "BY": "Беларусь",
 }
+
+# Downtime task — surfaced as its own report column and sheet.
+_DOWNTIME_KEY = "GENERAL-122"
+_DOWNTIME_SHEET_TITLE = "Простои GENERAL-122"
 
 
 # ---------------------------------------------------------------------------
@@ -202,13 +207,14 @@ def _build_summary_sheet(
 
     headers = [
         "Сотрудник", "Страна", "Факт, ч", "Норма, ч",
-        "Разница", "Статус", "Замечания",
+        "Разница", "Простои GENERAL-122, ч", "Статус", "Замечания",
     ]
     header_row = 3
     _write_row(ws, header_row, headers, style="ta_table_header")
 
     total_actual = 0.0
     total_expected = 0.0
+    total_downtime = 0.0
     current_row = header_row + 1
 
     for username in sorted(wl_by_user.keys()):
@@ -217,6 +223,7 @@ def _build_summary_sheet(
         country = get_country(username)
 
         actual = sum(wl.hours for wl in user_wl)
+        downtime = sum(wl.hours for wl in user_wl if wl.key == _DOWNTIME_KEY)
         dates = [wl.started for wl in user_wl]
         year = min(dates).year
         month = min(dates).month
@@ -238,6 +245,7 @@ def _build_summary_sheet(
         issue_count = len(user_cr)
         total_actual += actual
         total_expected += expected
+        total_downtime += downtime
 
         row_vals = [
             username,
@@ -245,17 +253,22 @@ def _build_summary_sheet(
             round(actual, 1),
             round(expected, 1),
             round(diff, 1),
+            round(downtime, 1),
             status,
             issue_count,
         ]
         _write_row(ws, current_row, row_vals, style="ta_data")
 
         # Apply monospace to numeric columns
-        for col in (3, 4, 5, 7):
+        for col in (3, 4, 5, 6, 8):
             ws.cell(row=current_row, column=col).style = "ta_mono"
 
+        # Highlight downtime hours when present
+        if downtime > 0:
+            ws.cell(row=current_row, column=6).fill = _FILL_WARNING
+
         # Status cell coloring
-        status_cell = ws.cell(row=current_row, column=6)
+        status_cell = ws.cell(row=current_row, column=7)
         if status == "Ошибка":
             status_cell.style = "ta_status_error"
         elif status == "Внимание":
@@ -272,6 +285,8 @@ def _build_summary_sheet(
     ws.cell(row=current_row, column=3).font = _FONT_SUBHEADER
     ws.cell(row=current_row, column=4, value=round(total_expected, 1)).style = "ta_mono"
     ws.cell(row=current_row, column=4).font = _FONT_SUBHEADER
+    ws.cell(row=current_row, column=6, value=round(total_downtime, 1)).style = "ta_mono"
+    ws.cell(row=current_row, column=6).font = _FONT_SUBHEADER
 
     ws.freeze_panes = ws.cell(row=header_row + 1, column=1).coordinate
 
@@ -281,8 +296,9 @@ def _build_summary_sheet(
         3: 12,  # Факт
         4: 12,  # Норма
         5: 12,  # Разница
-        6: 14,  # Статус
-        7: 14,  # Замечания
+        6: 22,  # Простои GENERAL-122
+        7: 14,  # Статус
+        8: 14,  # Замечания
     })
 
 
@@ -623,6 +639,96 @@ def _build_underlogged_sheet(
 
 
 # ---------------------------------------------------------------------------
+# Downtime sheet builder ("Простои GENERAL-122")
+# ---------------------------------------------------------------------------
+
+def _build_downtime_sheet(
+    ws,
+    worklogs: list[WorklogEntry],
+) -> None:
+    """Build a dedicated sheet for downtime logged to GENERAL-122."""
+
+    downtime_logs = [wl for wl in worklogs if wl.key == _DOWNTIME_KEY]
+    title = (
+        downtime_logs[0].title
+        if downtime_logs
+        else "Простои из-за отсутствия проекта"
+    )
+
+    ws.cell(row=1, column=1, value=_DOWNTIME_SHEET_TITLE).style = "ta_header"
+    ws.cell(row=2, column=1, value=f"{_DOWNTIME_KEY} — {title}").font = _FONT_LABEL
+
+    # --- Summary by employee ---
+    current_row = 4
+    ws.cell(row=current_row, column=1, value="Итого по сотрудникам").style = "ta_subheader"
+    current_row += 1
+
+    sum_headers = ["Сотрудник", "Страна", "Часы"]
+    _write_row(ws, current_row, sum_headers, style="ta_table_header")
+    sum_header_row = current_row
+    current_row += 1
+
+    by_user: dict[str, float] = defaultdict(float)
+    for wl in downtime_logs:
+        by_user[wl.username] += wl.hours
+
+    grand_total = 0.0
+    if by_user:
+        for username in sorted(by_user.keys()):
+            hours = by_user[username]
+            grand_total += hours
+            _write_row(ws, current_row, [
+                username,
+                get_country(username),
+                round(hours, 2),
+            ], style="ta_data")
+            ws.cell(row=current_row, column=3).style = "ta_mono"
+            if hours > 0:
+                ws.cell(row=current_row, column=3).fill = _FILL_WARNING
+            current_row += 1
+    else:
+        ws.cell(row=current_row, column=1, value="Нет списаний на простои").font = _FONT_SUCCESS
+        ws.cell(row=current_row, column=1).fill = _FILL_SUCCESS
+        current_row += 1
+
+    ws.cell(row=current_row, column=1, value="Итого").font = _FONT_SUBHEADER
+    cell = ws.cell(row=current_row, column=3, value=round(grand_total, 2))
+    cell.style = "ta_mono"
+    cell.font = _FONT_SUBHEADER
+    current_row += 2
+
+    # --- Detail lines ---
+    ws.cell(row=current_row, column=1, value="Детализация списаний").style = "ta_subheader"
+    current_row += 1
+
+    detail_headers = ["Сотрудник", "Дата", "Часы", "Комментарий"]
+    _write_row(ws, current_row, detail_headers, style="ta_table_header")
+    current_row += 1
+
+    if downtime_logs:
+        for wl in sorted(downtime_logs, key=lambda w: (w.username, w.started)):
+            _write_row(ws, current_row, [
+                wl.username,
+                wl.started.strftime("%d.%m.%Y") if wl.started else "",
+                round(wl.hours, 2),
+                wl.comment or "",
+            ], style="ta_data")
+            ws.cell(row=current_row, column=3).style = "ta_mono"
+            current_row += 1
+    else:
+        ws.cell(row=current_row, column=1, value="Нет записей").font = _FONT_LABEL
+
+    ws.freeze_panes = ws.cell(row=sum_header_row + 1, column=1).coordinate
+
+    _set_column_widths(ws, {
+        1: 30,   # Сотрудник
+        2: 14,   # Страна / Дата
+        3: 12,   # Часы
+        4: 60,   # Комментарий
+    })
+
+
+# ---------------------------------------------------------------------------
 # Invest directions sheet builder ("Инвест-направления")
 # ---------------------------------------------------------------------------
 
@@ -898,6 +1004,51 @@ def _build_invest_sheet(
         cell.font = _FONT_SUBHEADER
     current_row += 2
 
+    # === SECTION 1c: Hours per employee and invest direction ===
+    ws.cell(
+        row=current_row, column=1, value="Инвест-часы по сотрудникам"
+    ).style = "ta_subheader"
+    current_row += 1
+
+    emp_dir_headers = ["Сотрудник", "Инвест-направление", "Количество часов"]
+    _write_row(ws, current_row, emp_dir_headers, style="ta_table_header")
+    current_row += 1
+
+    emp_dir_hours: dict[tuple[str, str], float] = defaultdict(float)
+
+    for r in auto_rows:
+        emp_dir_hours[(r.username, r.invest_project)] += r.hours
+
+    for r in buh_rows:
+        if r.invest_project:
+            emp_dir_hours[(r.username, r.invest_project)] += r.hours
+
+    for r in manual_rows:
+        if r.invest_project and r.percentage is not None:
+            emp_dir_hours[(r.username, r.invest_project)] += (
+                r.hours * r.percentage / 100.0
+            )
+
+    emp_dir_total = 0.0
+    if emp_dir_hours:
+        for (uname, direction) in sorted(emp_dir_hours.keys()):
+            hours = emp_dir_hours[(uname, direction)]
+            _write_row(ws, current_row, [
+                uname, direction, round(hours, 2),
+            ], style="ta_data")
+            ws.cell(row=current_row, column=3).style = "ta_mono"
+            emp_dir_total += hours
+            current_row += 1
+    else:
+        ws.cell(row=current_row, column=1, value="Нет записей").font = _FONT_LABEL
+        current_row += 1
+
+    ws.cell(row=current_row, column=2, value="Итого").font = _FONT_SUBHEADER
+    cell = ws.cell(row=current_row, column=3, value=round(emp_dir_total, 2))
+    cell.style = "ta_mono"
+    cell.font = _FONT_SUBHEADER
+    current_row += 2
+
     # === SECTION 2: Auto-allocated entries (Type 1) ===
     ws.cell(row=current_row, column=1, value="Автоматическое распределение (100% инвест)").style = "ta_subheader"
     current_row += 1
@@ -1040,7 +1191,8 @@ def _build_invest_sheet(
 def generate_report(upload_id: int, db: Session) -> bytes:
     """Build an openpyxl Workbook and return .xlsx bytes.
 
-    Sheets: Сводка, Распределение, Инвест-направления, Ошибки, Недобор часов.
+    Sheets: Сводка, Распределение, Инвест-направления, Простои GENERAL-122,
+    Ошибки, Недобор часов.
     """
 
     worklogs: list[WorklogEntry] = (
@@ -1086,16 +1238,20 @@ def generate_report(upload_id: int, db: Session) -> bytes:
     ws_invest = wb.create_sheet(title="Инвест-направления")
     _build_invest_sheet(ws_invest, worklogs, upload_id, db)
 
-    # 4) Consolidated errors sheet
+    # 4) Downtime (GENERAL-122) sheet
+    ws_downtime = wb.create_sheet(title=_DOWNTIME_SHEET_TITLE)
+    _build_downtime_sheet(ws_downtime, worklogs)
+
+    # 5) Consolidated errors sheet
     ws_errors = wb.create_sheet(title="Ошибки")
     _build_errors_sheet(ws_errors, check_results, worklogs)
 
-    # 5) Under-logged hours sheet (hours_mismatch with negative diff)
+    # 6) Under-logged hours sheet (hours_mismatch with negative diff)
     ws_underlogged = wb.create_sheet(title="Недобор часов")
     _build_underlogged_sheet(ws_underlogged, check_results)
 
     logger.info(
-        "Report generated for upload %d: 5 sheets, %d check results",
+        "Report generated for upload %d: 6 sheets, %d check results",
         upload_id,
         len(check_results),
     )

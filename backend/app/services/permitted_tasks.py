@@ -13,6 +13,11 @@ Exclusion formats in column G:
     - "Носов Михаил"                  — this person is excluded
     - "все, кроме Носова Михаила"     — only the named person is allowed
     - empty                           — no exclusions
+
+Invest columns (I/J):
+    - I = invest direction (concrete name like ``MENA`` / ``Alphyn``, or
+      ambiguous ``MENA / другой``)
+    - J = allocation method; empty J means auto **only** when I is concrete
 """
 
 from __future__ import annotations
@@ -24,9 +29,9 @@ from pathlib import Path
 
 import openpyxl
 
-_DEFAULT_PATH = (
-    Path(__file__).resolve().parents[3] / "data" / "input" / "Issues CHANGE (2).xlsx"
-)
+from app.config import settings
+
+_DEFAULT_PATH = Path(settings.permitted_tasks_path)
 
 
 COMMENT_RULE_STRICT = "strict"
@@ -207,17 +212,36 @@ class PermittedTasksRegistry:
         """Return (invest_direction, invest_allocation) or None.
 
         Lookup order mirrors ``check()``: key rule first, then project+type.
-        Returns None when the matched rule has no invest data.
+        Returns None when the matched rule has no usable invest data
+        (missing direction, missing allocation method, or both).
         """
         kr = self._key_rules.get(key)
-        if kr is not None and kr.invest_direction:
+        if kr is not None and kr.invest_direction and kr.invest_allocation:
             return kr.invest_direction, kr.invest_allocation
 
         ptr = self._pt_rules.get((project, task_type))
-        if ptr is not None and ptr.invest_direction:
+        if ptr is not None and ptr.invest_direction and ptr.invest_allocation:
             return ptr.invest_direction, ptr.invest_allocation
 
         return None
+
+    def list_concrete_invest_directions(self) -> list[str]:
+        """Return sorted unique invest project names from rules (e.g. MENA, Alphyn).
+
+        Ambiguous labels like ``MENA / другой`` are excluded.
+        """
+        directions: set[str] = set()
+        for rule in self._key_rules.values():
+            if rule.invest_allocation and _is_concrete_invest_direction(
+                rule.invest_direction
+            ):
+                directions.add(rule.invest_direction.strip())
+        for rule in self._pt_rules.values():
+            if rule.invest_allocation and _is_concrete_invest_direction(
+                rule.invest_direction
+            ):
+                directions.add(rule.invest_direction.strip())
+        return sorted(directions)
 
     def get_comment_rule(self, key: str, project: str, task_type: str) -> str:
         """Return the comment rule for a task: 'strict', 'lenient', or ''."""
@@ -250,11 +274,22 @@ _INVEST_ALLOC_MAP = {
 }
 
 
+def _is_concrete_invest_direction(direction: str) -> bool:
+    """True when column I names a single invest project (e.g. MENA, Alphyn).
+
+    Values like ``MENA / другой`` are ambiguous and need an allocation method
+    in column J; they must not be treated as automatic.
+    """
+    direction = direction.strip()
+    return bool(direction) and "/" not in direction
+
+
 def _normalize_invest_allocation(raw: str, invest_direction: str) -> str:
     """Map the raw invest allocation text to one of the INVEST_* constants."""
     raw_lower = raw.strip().lower()
     if not raw_lower:
-        return INVEST_AUTO if invest_direction else ""
+        # Empty J → auto only for a concrete project name in I.
+        return INVEST_AUTO if _is_concrete_invest_direction(invest_direction) else ""
     return _INVEST_ALLOC_MAP.get(raw_lower, raw.strip())
 
 
@@ -321,10 +356,12 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
         permitted = status_raw == "да"
         excluded_users, only_users = _parse_exclusions(excl_raw)
         comment_rule = _parse_comment_rule(comment_rule_raw)
-        invest_direction = invest_dir_raw
         invest_allocation = _normalize_invest_allocation(
-            invest_alloc_raw, invest_direction
+            invest_alloc_raw, invest_dir_raw
         )
+        # Drop invest metadata when allocation could not be determined
+        # (e.g. I="MENA / другой" with empty J — ambiguous, not auto).
+        invest_direction = invest_dir_raw if invest_allocation else ""
 
         if key and "-" in key:
             registry.add_key_rule(

@@ -49,6 +49,23 @@ In the first phase, everything runs locally (on the developer's machine).
 No cloud hosting is needed in the first phase. Everything runs locally.
 When the app is ready for deployment, the backend can be moved to Railway, the frontend to Vercel, and the database to PostgreSQL.
 
+## Packaged Distribution (Single Windows .exe)
+
+For sharing the app with non-technical colleagues, it is packaged into a single
+Windows executable (`dist/TimeAudit.exe`) using PyInstaller. See `docs/deploy.md`
+for full instructions. Key facts:
+
+| Aspect | How it works |
+|--------|--------------|
+| One file | `TimeAudit.exe` — double-click to launch; the browser opens automatically |
+| Frontend | Built as a static export (`next build` with `output: "export"` -> `frontend/out`) and served by the Python backend on a single local port |
+| Single origin | Backend serves both the UI (at `/`) and the API (under `/api`), so no dev proxy is needed in the build |
+| Writable data | A `data/` folder is created next to the `.exe` (SQLite database + user files) |
+| Bundled resources | Static frontend, the reference workbook, `config/employee_countries.json`, and `backend/.env` (embedded API keys) are packed inside the `.exe` |
+| Build entry point | `backend/run.py` starts uvicorn and opens the browser |
+| Build config | `TimeAudit.spec` (PyInstaller) and `build.ps1` (one-command build) |
+| Portability | Copy `TimeAudit.exe` to any Windows PC and run — no Python, Node, or install required |
+
 ## Data Storage
 
 | What | Where | Notes |

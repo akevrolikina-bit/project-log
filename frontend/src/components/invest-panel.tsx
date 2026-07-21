@@ -1054,6 +1054,53 @@ function StepThree({
       summary[p].auto + summary[p].buh + summary[p].manual;
   }
 
+  // Per-employee breakdown: how many hours each employee spent on each
+  // invest direction (across auto / BUH / manual allocations).
+  const byEmployeeProject: Record<string, number> = {};
+  const addEmployeeHours = (
+    username: string,
+    project: string,
+    hours: number
+  ) => {
+    const k = `${username}::${project}`;
+    byEmployeeProject[k] = (byEmployeeProject[k] ?? 0) + hours;
+  };
+
+  for (const e of investData.auto_entries) {
+    addEmployeeHours(e.username, e.invest_project, e.hours);
+  }
+  for (const e of investData.buh_entries) {
+    if (e.invest_project) {
+      addEmployeeHours(e.username, e.invest_project, e.hours);
+    }
+  }
+  for (const e of investData.manual_percent_entries) {
+    const k = `${e.username}::${e.task_key}`;
+    const pct = percentValues[k];
+    const proj = projectValues[k];
+    if (pct != null && proj) {
+      addEmployeeHours(e.username, proj, (e.hours * pct) / 100);
+    }
+  }
+  for (const e of investData.manual_project_entries) {
+    const k = `${e.username}::${e.task_key}`;
+    const proj = projectValues[k];
+    if (proj) {
+      addEmployeeHours(e.username, proj, e.hours);
+    }
+  }
+
+  const employeeRows = Object.entries(byEmployeeProject)
+    .map(([k, hours]) => {
+      const [username, project] = k.split("::");
+      return { username, project, hours };
+    })
+    .sort(
+      (a, b) =>
+        a.username.localeCompare(b.username) ||
+        a.project.localeCompare(b.project)
+    );
+
   return (
     <>
       {saveSuccess && (
@@ -1121,6 +1168,44 @@ function StepThree({
             </TableBody>
           </Table>
         </div>
+      </div>
+
+      <div>
+        <h3 className="mb-3 text-sm font-medium">
+          Инвест-часы по сотрудникам
+        </h3>
+        {employeeRows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Нет распределённых инвест-часов.
+          </p>
+        ) : (
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Сотрудник</TableHead>
+                  <TableHead>Инвест-направление</TableHead>
+                  <TableHead className="text-right">
+                    Количество часов
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {employeeRows.map((r) => (
+                  <TableRow key={`${r.username}::${r.project}`}>
+                    <TableCell className="font-medium">
+                      {r.username}
+                    </TableCell>
+                    <TableCell>{r.project}</TableCell>
+                    <TableCell className="font-mono text-right">
+                      {r.hours.toFixed(2)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </div>
 
       <div className="flex justify-start">
