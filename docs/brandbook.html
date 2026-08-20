@@ -29,6 +29,10 @@
       --accent-light: #EFF6FF;
       --accent-muted: #93C5FD;
 
+      /* Invest / allocation section */
+      --invest: #7C3AED;
+      --invest-light: #F5F3FF;
+
       /* Status */
       --success: #059669;
       --success-light: #ECFDF5;
@@ -100,6 +104,9 @@
       --accent-hover: #93C5FD;
       --accent-light: rgba(96, 165, 250, 0.1);
       --accent-muted: #1E40AF;
+
+      --invest: #A78BFA;
+      --invest-light: rgba(167, 139, 250, 0.12);
 
       --success: #34D399;
       --success-light: rgba(52, 211, 153, 0.1);
@@ -530,8 +537,13 @@
       <div class="grid-4">
         <div class="swatch">
           <div class="swatch-color" style="background: var(--accent)"></div>
-          <div class="swatch-label">Accent</div>
-          <div class="swatch-value">--accent</div>
+          <div class="swatch-label">Accent / Check</div>
+          <div class="swatch-value">--accent · check section</div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-color" style="background: var(--invest)"></div>
+          <div class="swatch-label">Invest / Allocation</div>
+          <div class="swatch-value">--invest · allocation section</div>
         </div>
         <div class="swatch">
           <div class="swatch-color" style="background: var(--success)"></div>
@@ -543,6 +555,8 @@
           <div class="swatch-label">Warning</div>
           <div class="swatch-value">--warning</div>
         </div>
+      </div>
+      <div class="grid-4" style="margin-top: var(--space-4)">
         <div class="swatch">
           <div class="swatch-color" style="background: var(--error)"></div>
           <div class="swatch-label">Error</div>
@@ -779,7 +793,7 @@
         </div>
         <div>
           <div style="font-weight: 600; margin-bottom: var(--space-1)">Restrained Color</div>
-          <div style="font-size: var(--text-sm); color: var(--text-secondary)">Neutral tones as the foundation. Color is used only for accents and statuses. No more than 2–3 colors on screen simultaneously.</div>
+          <div style="font-size: var(--text-sm); color: var(--text-secondary)">Neutral tones as the foundation. Color is used only for accents, statuses, and to distinguish the two workflow sections: check (blue, --accent) and allocation (violet, --invest). Distinguish sections with a left stripe and a light header tint — never large colored fills. No more than 2–3 strong colors on screen simultaneously.</div>
         </div>
         <div>
           <div style="font-weight: 600; margin-bottom: var(--space-1)">Hierarchy Through Size</div>

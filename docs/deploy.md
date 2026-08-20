@@ -34,7 +34,7 @@ Prerequisites (one-time setup):
 npm run setup        # creates backend\.venv and installs frontend deps
 ```
 
-The reference workbook `data/input/Issues CHANGE (2).xlsx` and the file
+The reference workbook `data/input/Issues CHANGE (3).xlsx` and the file
 `backend/.env` (with API keys) must be present before building — they are packed
 into the executable. Note that both are git-ignored, so keep local copies.
 
@@ -76,5 +76,5 @@ if the file leaks.
 
 - "TimeAudit.exe is currently running" during build: close any running instance
   (close its console window), then run `build.ps1` again.
-- Build fails complaining about a missing `Issues CHANGE (2).xlsx` or `.env`:
+- Build fails complaining about a missing `Issues CHANGE (3).xlsx` or `.env`:
   make sure both files exist in the paths listed above.

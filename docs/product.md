@@ -81,13 +81,16 @@ INPUT DATA
 ├── Google Docs: permitted tasks + rules
 └── Settings: employees + calendars + period
         │
-        ▼
-AUTOMATED CHECKS
-├── Is the task on the permitted list?
-└── Hours = working days per country calendar?
+        ├──► AUTOMATED CHECKS (optional)
+        │    ├── Is the task on the permitted list?
+        │    └── Hours = working days per country calendar?
+        │
+        └──► INVEST ALLOCATION (optional, independent of checks)
+             ├── Auto / BUH company / manual percent / manual project
+             └── Excel sheet "Инвест-направления"
         │
         ▼
 OUTPUT
-├── Excel — errors (one sheet per employee)
-└── Summary — time by projects and regions
+├── Excel — errors (one sheet per employee; empty if checks were skipped)
+└── Summary — time by projects, regions, and invest directions
 ```

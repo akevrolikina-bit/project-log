@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
-import { X } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -19,6 +19,7 @@ import type { WorklogEntry } from "@/lib/api";
 interface WorklogTableProps {
   entries: WorklogEntry[];
   isLoading?: boolean;
+  defaultCollapsed?: boolean;
 }
 
 function MultiFilter({
@@ -101,7 +102,12 @@ function MultiFilter({
   );
 }
 
-export function WorklogTable({ entries, isLoading }: WorklogTableProps) {
+export function WorklogTable({
+  entries,
+  isLoading,
+  defaultCollapsed = false,
+}: WorklogTableProps) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [selectedUsernames, setSelectedUsernames] = useState<string[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
@@ -165,6 +171,10 @@ export function WorklogTable({ entries, isLoading }: WorklogTableProps) {
     setDateTo("");
   };
 
+  useEffect(() => {
+    setCollapsed(defaultCollapsed);
+  }, [defaultCollapsed]);
+
   const addUsername = useCallback((v: string) => setSelectedUsernames((prev) => [...prev, v]), []);
   const removeUsername = useCallback((v: string) => setSelectedUsernames((prev) => prev.filter((x) => x !== v)), []);
   const addProject = useCallback((v: string) => setSelectedProjects((prev) => [...prev, v]), []);
@@ -195,6 +205,31 @@ export function WorklogTable({ entries, isLoading }: WorklogTableProps) {
 
   return (
     <div className="space-y-4">
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        className="flex w-full items-center justify-between rounded-lg border bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+      >
+        <span className="flex items-center gap-2">
+          {collapsed ? (
+            <ChevronRight className="size-4 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="size-4 text-muted-foreground" />
+          )}
+          <span className="text-sm font-medium">Загруженные записи</span>
+          <span className="text-xs text-muted-foreground">
+            {entries.length} строк
+          </span>
+        </span>
+        {collapsed && (
+          <span className="text-xs text-muted-foreground">
+            Нажмите, чтобы открыть
+          </span>
+        )}
+      </button>
+
+      {collapsed ? null : (
+      <>
       {/* Filters panel */}
       <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
         <div className="flex items-center justify-between">
@@ -288,9 +323,9 @@ export function WorklogTable({ entries, isLoading }: WorklogTableProps) {
               <TableHead>Проект</TableHead>
               <TableHead>Ключ</TableHead>
               <TableHead>Тип</TableHead>
-              <TableHead className="max-w-[200px]">Название</TableHead>
+              <TableHead>Название</TableHead>
               <TableHead className="text-right">Часы</TableHead>
-              <TableHead className="max-w-[200px]">Комментарий</TableHead>
+              <TableHead>Комментарий</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -303,14 +338,17 @@ export function WorklogTable({ entries, isLoading }: WorklogTableProps) {
                 <TableCell>{entry.project}</TableCell>
                 <TableCell className="font-mono text-xs">{entry.key}</TableCell>
                 <TableCell>{entry.task_type}</TableCell>
-                <TableCell className="max-w-[200px] truncate" title={entry.title}>
+                <TableCell
+                  className="max-w-[360px] whitespace-normal break-words"
+                  title={entry.title}
+                >
                   {entry.title}
                 </TableCell>
                 <TableCell className="text-right font-mono">
                   {entry.hours.toFixed(2)}
                 </TableCell>
                 <TableCell
-                  className="max-w-[200px] truncate text-muted-foreground"
+                  className="max-w-[360px] whitespace-normal break-words text-muted-foreground"
                   title={entry.comment}
                 >
                   {entry.comment}
@@ -356,6 +394,8 @@ export function WorklogTable({ entries, isLoading }: WorklogTableProps) {
             </button>
           ))}
         </div>
+      )}
+      </>
       )}
     </div>
   );

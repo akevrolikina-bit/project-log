@@ -37,7 +37,7 @@ FRONTEND_DIR = BUNDLE_DIR / "frontend" / "out"
 _ENV_FILE = BUNDLE_DIR / "backend" / ".env"
 
 # Reference permitted-tasks workbook shipped with the app (read-only).
-_DEFAULT_PERMITTED_TASKS = BUNDLE_DIR / "data" / "input" / "Issues CHANGE (2).xlsx"
+_DEFAULT_PERMITTED_TASKS = BUNDLE_DIR / "data" / "input" / "Issues CHANGE (3).xlsx"
 
 
 class Settings(BaseSettings):

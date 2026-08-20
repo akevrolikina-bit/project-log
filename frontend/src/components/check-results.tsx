@@ -233,8 +233,8 @@ function EmployeeRow({ summary }: { summary: CheckSummary }) {
 export function CheckResults({ summaries, isLoading }: CheckResultsProps) {
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader>
+      <Card className="border-l-4 border-l-[var(--brand)]">
+        <CardHeader className="-mt-4 bg-[var(--brand-light)] pt-4">
           <CardTitle>Результаты проверки</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -253,8 +253,8 @@ export function CheckResults({ summaries, isLoading }: CheckResultsProps) {
   const errorCount = summaries.filter((s) => s.status === "error").length;
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="border-l-4 border-l-[var(--brand)]">
+      <CardHeader className="-mt-4 bg-[var(--brand-light)] pt-4">
         <CardTitle>Результаты проверки</CardTitle>
         <CardDescription>
           Сотрудников: {summaries.length} ·{" "}

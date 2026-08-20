@@ -7,6 +7,8 @@ import {
   ChevronRight,
   Check,
   FileSpreadsheet,
+  Plus,
+  X,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -35,6 +37,10 @@ import {
   type ManualPercentEntry,
   type ManualProjectEntry,
   type BuhEntry,
+  type KeywordEntry,
+  type PlanFteEntry,
+  type FtePlanItem,
+  type PlanVsFactEntry,
 } from "@/lib/api";
 
 interface InvestPanelProps {
@@ -42,6 +48,128 @@ interface InvestPanelProps {
 }
 
 type Step = 1 | 2 | 3;
+
+type AllocSplit = {
+  id: string;
+  project: string;
+  percentage: number | null;
+};
+
+function newSplitId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emptySplit(): AllocSplit {
+  return { id: newSplitId(), project: "", percentage: null };
+}
+
+function sortInvestProjects(projects: string[]): string[] {
+  const unique = [...new Set(projects.filter(Boolean))];
+  const rest = unique
+    .filter((p) => p !== "MENA")
+    .sort((a, b) => a.localeCompare(b, "en"));
+  return unique.includes("MENA") ? ["MENA", ...rest] : rest;
+}
+
+function splitsToAllocations(
+  username: string,
+  taskKey: string,
+  splits: AllocSplit[],
+  allocationType: string
+): AllocationEntry[] {
+  const active = splits.filter((s) => s.project);
+  if (active.length === 1 && active[0].percentage == null) {
+    return [
+      {
+        username,
+        task_key: taskKey,
+        invest_project: active[0].project,
+        percentage: 100,
+        allocation_type: allocationType,
+      },
+    ];
+  }
+  return active
+    .filter((s) => s.percentage != null && s.percentage > 0)
+    .map((s) => ({
+      username,
+      task_key: taskKey,
+      invest_project: s.project,
+      percentage: s.percentage as number,
+      allocation_type: allocationType,
+    }));
+}
+
+function splitHours(
+  hours: number,
+  splits: AllocSplit[]
+): { project: string; hours: number }[] {
+  const active = splits.filter((s) => s.project);
+  if (active.length === 1 && active[0].percentage == null) {
+    return [{ project: active[0].project, hours }];
+  }
+  return active
+    .filter((s) => s.percentage != null && s.percentage > 0)
+    .map((s) => ({
+      project: s.project,
+      hours: (hours * (s.percentage as number)) / 100,
+    }));
+}
+
+function splitsPercentSum(splits: AllocSplit[]): number {
+  return splits.reduce((sum, s) => sum + (s.percentage ?? 0), 0);
+}
+
+function fmtMetric(value: number | null | undefined): string {
+  if (value == null) return "—";
+  return value.toFixed(2);
+}
+
+function sumKnown(values: Array<number | null | undefined>): number | null {
+  const nums = values.filter((v): v is number => v != null);
+  if (nums.length === 0) return null;
+  return nums.reduce((a, b) => a + b, 0);
+}
+
+type ProjectPlanGroup = {
+  project: string;
+  people: PlanVsFactEntry[];
+  planFte: number | null;
+  planHours: number | null;
+  factHours: number;
+  factFte: number | null;
+  deltaFte: number | null;
+  deltaHours: number | null;
+};
+
+function groupPlanVsFactByProject(
+  rows: PlanVsFactEntry[]
+): ProjectPlanGroup[] {
+  const byProject: Record<string, PlanVsFactEntry[]> = {};
+  for (const row of rows) {
+    (byProject[row.invest_project] ??= []).push(row);
+  }
+  return sortInvestProjects(Object.keys(byProject)).map((project) => {
+    const people = [...byProject[project]].sort((a, b) =>
+      a.username.localeCompare(b.username, "ru")
+    );
+    const planFte = sumKnown(people.map((p) => p.plan_fte));
+    const planHours = sumKnown(people.map((p) => p.plan_hours));
+    const factHours = people.reduce((sum, p) => sum + p.fact_hours, 0);
+    const factFte = sumKnown(people.map((p) => p.fact_fte));
+    return {
+      project,
+      people,
+      planFte,
+      planHours,
+      factHours,
+      factFte,
+      deltaFte:
+        factFte != null && planFte != null ? factFte - planFte : null,
+      deltaHours: planHours != null ? factHours - planHours : null,
+    };
+  });
+}
 
 export function InvestPanel({ uploadId }: InvestPanelProps) {
   const [step, setStep] = useState<Step>(1);
@@ -57,12 +185,10 @@ export function InvestPanel({ uploadId }: InvestPanelProps) {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [percentValues, setPercentValues] = useState<
-    Record<string, number | null>
-  >({});
-  const [projectValues, setProjectValues] = useState<
-    Record<string, string | null>
-  >({});
+  const [splitsMap, setSplitsMap] = useState<Record<string, AllocSplit[]>>(
+    {}
+  );
+  const [fteValues, setFteValues] = useState<Record<string, number | null>>({});
 
   const csvInputRef = useRef<HTMLInputElement>(null);
 
@@ -90,32 +216,59 @@ export function InvestPanel({ uploadId }: InvestPanelProps) {
     try {
       const data = await getInvestData(uploadId);
       setInvestData(data);
-      const pv: Record<string, number | null> = {};
-      const prv: Record<string, string | null> = {};
+      const nextSplits: Record<string, AllocSplit[]> = {};
+      const addSplit = (
+        key: string,
+        project: string | null,
+        percentage: number | null
+      ) => {
+        if (!nextSplits[key]) nextSplits[key] = [];
+        nextSplits[key].push({
+          id: newSplitId(),
+          project: project ?? "",
+          percentage,
+        });
+      };
       for (const a of data.saved_allocations) {
         const k = `${a.username}::${a.task_key}`;
-        if (a.allocation_type === "manual_percent") {
-          pv[k] = a.percentage;
-          prv[k] = a.invest_project;
-        } else {
-          prv[k] = a.invest_project;
-        }
+        addSplit(k, a.invest_project, a.percentage);
       }
       for (const e of data.manual_percent_entries) {
         const k = `${e.username}::${e.task_key}`;
-        if (!(k in pv)) {
-          pv[k] = e.percentage;
-          prv[k] = e.invest_project;
+        if (!nextSplits[k]) {
+          nextSplits[k] = [
+            {
+              id: newSplitId(),
+              project: e.invest_project ?? data.invest_projects[0] ?? "",
+              percentage: e.percentage,
+            },
+          ];
         }
       }
       for (const e of data.manual_project_entries) {
         const k = `${e.username}::${e.task_key}`;
-        if (!(k in prv)) {
-          prv[k] = e.invest_project;
+        if (!nextSplits[k]) {
+          nextSplits[k] = [
+            {
+              id: newSplitId(),
+              project: e.invest_project ?? "",
+              percentage: e.invest_project ? 100 : null,
+            },
+          ];
         }
       }
-      setPercentValues(pv);
-      setProjectValues(prv);
+      for (const e of data.keyword_entries) {
+        const k = `${e.username}::${e.task_key}`;
+        if (!nextSplits[k] && !e.matched_project) {
+          nextSplits[k] = [emptySplit()];
+        }
+      }
+      const fv: Record<string, number | null> = {};
+      for (const fp of data.fte_plans) {
+        fv[`${fp.username}::${fp.invest_project}`] = fp.fte_value;
+      }
+      setSplitsMap(nextSplits);
+      setFteValues(fv);
     } catch {
       setError("Не удалось загрузить данные инвест-распределения");
     } finally {
@@ -180,6 +333,13 @@ export function InvestPanel({ uploadId }: InvestPanelProps) {
 
   const handleSave = async () => {
     if (!investData) return;
+    const overLimit = Object.values(splitsMap).some(
+      (splits) => splitsPercentSum(splits) > 100.001
+    );
+    if (overLimit) {
+      setError("Сумма процентов по одной задаче не может быть больше 100");
+      return;
+    }
     setIsSaving(true);
     setSaveSuccess(false);
     setError(null);
@@ -188,35 +348,58 @@ export function InvestPanel({ uploadId }: InvestPanelProps) {
 
     for (const e of investData.manual_percent_entries) {
       const k = `${e.username}::${e.task_key}`;
-      const pct = percentValues[k];
-      const proj = projectValues[k];
-      if (pct != null && pct > 0 && proj) {
-        allocations.push({
-          username: e.username,
-          task_key: e.task_key,
-          invest_project: proj,
-          percentage: pct,
-          allocation_type: "manual_percent",
-        });
-      }
+      allocations.push(
+        ...splitsToAllocations(
+          e.username,
+          e.task_key,
+          splitsMap[k] ?? [],
+          "manual_percent"
+        )
+      );
     }
 
     for (const e of investData.manual_project_entries) {
       const k = `${e.username}::${e.task_key}`;
-      const proj = projectValues[k];
-      if (proj) {
-        allocations.push({
-          username: e.username,
-          task_key: e.task_key,
-          invest_project: proj,
-          percentage: 100,
-          allocation_type: "manual_project",
+      allocations.push(
+        ...splitsToAllocations(
+          e.username,
+          e.task_key,
+          splitsMap[k] ?? [],
+          "manual_project"
+        )
+      );
+    }
+
+    for (const e of investData.keyword_entries) {
+      if (e.matched_project) continue;
+      const k = `${e.username}::${e.task_key}`;
+      allocations.push(
+        ...splitsToAllocations(
+          e.username,
+          e.task_key,
+          splitsMap[k] ?? [],
+          "keyword"
+        )
+      );
+    }
+
+    const ftePlans: FtePlanItem[] = [];
+    for (const [key, value] of Object.entries(fteValues)) {
+      if (value != null && value > 0) {
+        const sep = key.indexOf("::");
+        if (sep === -1) continue;
+        const username = key.slice(0, sep);
+        const project = key.slice(sep + 2);
+        ftePlans.push({
+          username,
+          invest_project: project,
+          fte_value: value,
         });
       }
     }
 
     try {
-      await saveInvestAllocations(uploadId, allocations);
+      await saveInvestAllocations(uploadId, allocations, ftePlans);
       setSaveSuccess(true);
       setStep(3);
       await loadInvestData();
@@ -229,9 +412,9 @@ export function InvestPanel({ uploadId }: InvestPanelProps) {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Инвест-направления</CardTitle>
+      <Card className="border-l-4 border-l-[var(--invest)]">
+        <CardHeader className="-mt-4 bg-[var(--invest-light)] pt-4">
+          <CardTitle>Распределение по проектам</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -243,10 +426,10 @@ export function InvestPanel({ uploadId }: InvestPanelProps) {
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="border-l-4 border-l-[var(--invest)]">
+      <CardHeader className="-mt-4 bg-[var(--invest-light)] pt-4">
         <div className="flex items-center justify-between">
-          <CardTitle>Инвест-направления</CardTitle>
+          <CardTitle>Распределение по проектам</CardTitle>
           <div className="flex items-center gap-2">
             <StepIndicator current={step} />
           </div>
@@ -280,10 +463,10 @@ export function InvestPanel({ uploadId }: InvestPanelProps) {
           <StepTwo
             investData={investData}
             isLoadingData={isLoadingData}
-            percentValues={percentValues}
-            setPercentValues={setPercentValues}
-            projectValues={projectValues}
-            setProjectValues={setProjectValues}
+            splitsMap={splitsMap}
+            setSplitsMap={setSplitsMap}
+            fteValues={fteValues}
+            setFteValues={setFteValues}
             onSave={handleSave}
             isSaving={isSaving}
             onBack={() => setStep(1)}
@@ -293,8 +476,8 @@ export function InvestPanel({ uploadId }: InvestPanelProps) {
         {step === 3 && (
           <StepThree
             investData={investData}
-            percentValues={percentValues}
-            projectValues={projectValues}
+            splitsMap={splitsMap}
+            fteValues={fteValues}
             saveSuccess={saveSuccess}
             onBack={() => setStep(2)}
           />
@@ -323,7 +506,7 @@ function StepIndicator({ current }: { current: Step }) {
             className={cn(
               "flex size-6 items-center justify-center rounded-full text-xs font-medium",
               s.n === current
-                ? "bg-[var(--accent)] text-white"
+                ? "bg-[var(--brand)] text-white"
                 : s.n < current
                   ? "bg-[var(--success-light)] text-[var(--success)]"
                   : "bg-[var(--bg-tertiary)] text-[var(--text-muted)]"
@@ -473,7 +656,7 @@ function StepOne({
                       type="checkbox"
                       checked={selected.has(emp.username)}
                       onChange={() => toggleEmployee(emp.username)}
-                      className="size-4 rounded border-[var(--border)] accent-[var(--accent)]"
+                      className="size-4 rounded border-[var(--border)] accent-[var(--brand)]"
                     />
                   </TableCell>
                   <TableCell className="font-medium">{emp.username}</TableCell>
@@ -482,7 +665,7 @@ function StepOne({
                   </TableCell>
                   <TableCell className="text-center">
                     {emp.has_invest_tasks ? (
-                      <span className="inline-flex h-5 items-center rounded-full bg-[var(--accent-light)] px-2 text-xs font-medium text-[var(--accent)]">
+                      <span className="inline-flex h-5 items-center rounded-full bg-[var(--brand-light)] px-2 text-xs font-medium text-[var(--brand)]">
                         Да
                       </span>
                     ) : (
@@ -515,13 +698,13 @@ function StepOne({
 interface StepTwoProps {
   investData: InvestData | null;
   isLoadingData: boolean;
-  percentValues: Record<string, number | null>;
-  setPercentValues: React.Dispatch<
-    React.SetStateAction<Record<string, number | null>>
+  splitsMap: Record<string, AllocSplit[]>;
+  setSplitsMap: React.Dispatch<
+    React.SetStateAction<Record<string, AllocSplit[]>>
   >;
-  projectValues: Record<string, string | null>;
-  setProjectValues: React.Dispatch<
-    React.SetStateAction<Record<string, string | null>>
+  fteValues: Record<string, number | null>;
+  setFteValues: React.Dispatch<
+    React.SetStateAction<Record<string, number | null>>
   >;
   onSave: () => void;
   isSaving: boolean;
@@ -531,10 +714,10 @@ interface StepTwoProps {
 function StepTwo({
   investData,
   isLoadingData,
-  percentValues,
-  setPercentValues,
-  projectValues,
-  setProjectValues,
+  splitsMap,
+  setSplitsMap,
+  fteValues,
+  setFteValues,
   onSave,
   isSaving,
   onBack,
@@ -549,13 +732,19 @@ function StepTwo({
     );
   }
 
-  const usernames = new Set<string>();
+  const usernames = new Set<string>(investData.selected_employees);
   investData.auto_entries.forEach((e) => usernames.add(e.username));
   investData.buh_entries.forEach((e) => usernames.add(e.username));
   investData.manual_percent_entries.forEach((e) => usernames.add(e.username));
   investData.manual_project_entries.forEach((e) => usernames.add(e.username));
+  investData.keyword_entries.forEach((e) => usernames.add(e.username));
+  investData.plan_fte_entries.forEach((e) => usernames.add(e.username));
 
   const sortedUsers = Array.from(usernames).sort();
+
+  const overLimit = Object.values(splitsMap).some(
+    (splits) => splitsPercentSum(splits) > 100.001
+  );
 
   return (
     <>
@@ -569,10 +758,10 @@ function StepTwo({
             key={username}
             username={username}
             investData={investData}
-            percentValues={percentValues}
-            setPercentValues={setPercentValues}
-            projectValues={projectValues}
-            setProjectValues={setProjectValues}
+            splitsMap={splitsMap}
+            setSplitsMap={setSplitsMap}
+            fteValues={fteValues}
+            setFteValues={setFteValues}
           />
         ))
       )}
@@ -581,10 +770,15 @@ function StepTwo({
         <Button variant="outline" onClick={onBack}>
           Назад
         </Button>
-        <Button onClick={onSave} disabled={isSaving}>
+        <Button onClick={onSave} disabled={isSaving || overLimit}>
           {isSaving ? "Сохранение..." : "Сохранить"}
         </Button>
       </div>
+      {overLimit && (
+        <p className="text-right text-xs text-[var(--error)]">
+          Сумма процентов по одной задаче не может быть больше 100
+        </p>
+      )}
     </>
   );
 }
@@ -596,23 +790,23 @@ function StepTwo({
 interface EmployeeAllocCardProps {
   username: string;
   investData: InvestData;
-  percentValues: Record<string, number | null>;
-  setPercentValues: React.Dispatch<
-    React.SetStateAction<Record<string, number | null>>
+  splitsMap: Record<string, AllocSplit[]>;
+  setSplitsMap: React.Dispatch<
+    React.SetStateAction<Record<string, AllocSplit[]>>
   >;
-  projectValues: Record<string, string | null>;
-  setProjectValues: React.Dispatch<
-    React.SetStateAction<Record<string, string | null>>
+  fteValues: Record<string, number | null>;
+  setFteValues: React.Dispatch<
+    React.SetStateAction<Record<string, number | null>>
   >;
 }
 
 function EmployeeAllocCard({
   username,
   investData,
-  percentValues,
-  setPercentValues,
-  projectValues,
-  setProjectValues,
+  splitsMap,
+  setSplitsMap,
+  fteValues,
+  setFteValues,
 }: EmployeeAllocCardProps) {
   const [expanded, setExpanded] = useState(true);
 
@@ -626,6 +820,12 @@ function EmployeeAllocCard({
     (e) => e.username === username
   );
   const manualProjEntries = investData.manual_project_entries.filter(
+    (e) => e.username === username
+  );
+  const keywordEntries = investData.keyword_entries.filter(
+    (e) => e.username === username
+  );
+  const planFteEntries = investData.plan_fte_entries.filter(
     (e) => e.username === username
   );
 
@@ -664,6 +864,14 @@ function EmployeeAllocCard({
 
       {expanded && (
         <div className="space-y-4 border-t px-4 py-4">
+          {/* FTE plan for every selected employee */}
+          <EmployeeFtePlanSection
+            username={username}
+            investProjects={sortInvestProjects(investData.invest_projects)}
+            fteValues={fteValues}
+            setFteValues={setFteValues}
+          />
+
           {/* Auto entries summary */}
           {autoEntries.length > 0 && (
             <AutoSection entries={autoEntries} />
@@ -678,11 +886,9 @@ function EmployeeAllocCard({
           {manualPctEntries.length > 0 && (
             <ManualPercentSection
               entries={manualPctEntries}
-              investProjects={investData.invest_projects}
-              percentValues={percentValues}
-              setPercentValues={setPercentValues}
-              projectValues={projectValues}
-              setProjectValues={setProjectValues}
+              investProjects={sortInvestProjects(investData.invest_projects)}
+              splitsMap={splitsMap}
+              setSplitsMap={setSplitsMap}
             />
           )}
 
@@ -690,9 +896,29 @@ function EmployeeAllocCard({
           {manualProjEntries.length > 0 && (
             <ManualProjectSection
               entries={manualProjEntries}
-              investProjects={investData.invest_projects}
-              projectValues={projectValues}
-              setProjectValues={setProjectValues}
+              investProjects={sortInvestProjects(investData.invest_projects)}
+              splitsMap={splitsMap}
+              setSplitsMap={setSplitsMap}
+            />
+          )}
+
+          {/* Keyword-based entries */}
+          {keywordEntries.length > 0 && (
+            <KeywordSection
+              entries={keywordEntries}
+              investProjects={sortInvestProjects(investData.invest_projects)}
+              splitsMap={splitsMap}
+              setSplitsMap={setSplitsMap}
+            />
+          )}
+
+          {/* Plan FTE task preview (GENERAL / GBTUTORIAL only) */}
+          {planFteEntries.length > 0 && (
+            <PlanFteSection
+              username={username}
+              entries={planFteEntries}
+              investProjects={sortInvestProjects(investData.invest_projects)}
+              fteValues={fteValues}
             />
           )}
         </div>
@@ -727,7 +953,9 @@ function AutoSection({ entries }: { entries: AutoEntry[] }) {
                 <TableCell className="font-mono text-xs">
                   {e.task_key}
                 </TableCell>
-                <TableCell className="text-sm">{e.title}</TableCell>
+                <TableCell className="max-w-[28rem] whitespace-normal break-words text-sm">
+                  {e.title}
+                </TableCell>
                 <TableCell className="font-mono text-right">
                   {e.hours.toFixed(2)}
                 </TableCell>
@@ -772,7 +1000,9 @@ function BuhSection({ entries }: { entries: BuhEntry[] }) {
                 <TableCell className="font-mono text-xs">
                   {e.task_key}
                 </TableCell>
-                <TableCell className="text-sm">{e.title}</TableCell>
+                <TableCell className="max-w-[28rem] whitespace-normal break-words text-sm">
+                  {e.title}
+                </TableCell>
                 <TableCell className="font-mono text-right">
                   {e.hours.toFixed(2)}
                 </TableCell>
@@ -803,32 +1033,138 @@ function BuhSection({ entries }: { entries: BuhEntry[] }) {
 // Manual percent section (editable)
 // ---------------------------------------------------------------------------
 
+interface SplitsEditorProps {
+  splits: AllocSplit[];
+  hours: number;
+  investProjects: string[];
+  onChange: (next: AllocSplit[]) => void;
+}
+
+function SplitsEditor({
+  splits,
+  hours,
+  investProjects,
+  onChange,
+}: SplitsEditorProps) {
+  const rows = splits.length > 0 ? splits : [emptySplit()];
+  const used = new Set(rows.map((s) => s.project).filter(Boolean));
+  const sum = splitsPercentSum(rows);
+  const over = sum > 100.001;
+  const canAdd = investProjects.some((p) => !used.has(p));
+
+  const updateRow = (id: string, patch: Partial<AllocSplit>) => {
+    onChange(rows.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {rows.map((split) => {
+        const investHours =
+          split.percentage != null ? (hours * split.percentage) / 100 : null;
+        const options = investProjects.filter(
+          (p) => p === split.project || !used.has(p)
+        );
+        return (
+          <div key={split.id} className="flex items-center gap-1.5">
+            <select
+              value={split.project}
+              onChange={(ev) =>
+                updateRow(split.id, { project: ev.target.value })
+              }
+              className="h-7 min-w-[7rem] flex-1 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              <option value="">—</option>
+              {options.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={split.percentage ?? ""}
+              onChange={(ev) => {
+                const val = ev.target.value ? Number(ev.target.value) : null;
+                updateRow(split.id, { percentage: val });
+              }}
+              className="h-7 w-16 text-right font-mono text-xs"
+            />
+            <span className="w-4 text-xs text-muted-foreground">%</span>
+            <span className="w-16 text-right font-mono text-xs text-muted-foreground">
+              {investHours != null ? `${investHours.toFixed(2)} ч` : "—"}
+            </span>
+            {rows.length > 1 && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() =>
+                  onChange(rows.filter((s) => s.id !== split.id))
+                }
+                aria-label="Удалить проект"
+              >
+                <X />
+              </Button>
+            )}
+          </div>
+        );
+      })}
+      {canAdd && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={() => onChange([...rows, emptySplit()])}
+        >
+          <Plus />
+          Добавить проект
+        </Button>
+      )}
+      {(rows.length > 1 || over) && (
+        <p
+          className={cn(
+            "text-xs",
+            over ? "text-[var(--error)]" : "text-muted-foreground"
+          )}
+        >
+          Сумма: {sum}%
+          {over ? " — нельзя больше 100%" : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Manual percent section (editable)
+// ---------------------------------------------------------------------------
+
 interface ManualPercentSectionProps {
   entries: ManualPercentEntry[];
   investProjects: string[];
-  percentValues: Record<string, number | null>;
-  setPercentValues: React.Dispatch<
-    React.SetStateAction<Record<string, number | null>>
-  >;
-  projectValues: Record<string, string | null>;
-  setProjectValues: React.Dispatch<
-    React.SetStateAction<Record<string, string | null>>
+  splitsMap: Record<string, AllocSplit[]>;
+  setSplitsMap: React.Dispatch<
+    React.SetStateAction<Record<string, AllocSplit[]>>
   >;
 }
 
 function ManualPercentSection({
   entries,
   investProjects,
-  percentValues,
-  setPercentValues,
-  projectValues,
-  setProjectValues,
+  splitsMap,
+  setSplitsMap,
 }: ManualPercentSectionProps) {
   return (
     <div>
       <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
         Ручное распределение (процент)
       </h4>
+      <p className="mb-2 text-xs text-muted-foreground">
+        Можно указать несколько инвест-проектов. Сумма процентов не больше
+        100.
+      </p>
       <div className="rounded-lg border">
         <Table>
           <TableHeader>
@@ -836,67 +1172,34 @@ function ManualPercentSection({
               <TableHead>Ключ</TableHead>
               <TableHead>Задача</TableHead>
               <TableHead className="text-right">Часы</TableHead>
-              <TableHead className="w-24">%</TableHead>
-              <TableHead className="w-32">Проект</TableHead>
-              <TableHead className="text-right">Инвест-часы</TableHead>
+              <TableHead>Распределение</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {entries.map((e) => {
               const k = `${e.username}::${e.task_key}`;
-              const pct = percentValues[k] ?? null;
-              const proj = projectValues[k] ?? investProjects[0] ?? "";
-              const investHours =
-                pct != null ? (e.hours * pct) / 100 : null;
+              const splits = splitsMap[k] ?? [emptySplit()];
 
               return (
                 <TableRow key={k}>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className="align-top font-mono text-xs">
                     {e.task_key}
                   </TableCell>
-                  <TableCell className="text-sm">{e.title}</TableCell>
-                  <TableCell className="font-mono text-right">
+                  <TableCell className="align-top max-w-[22rem] whitespace-normal break-words text-sm">
+                    {e.title}
+                  </TableCell>
+                  <TableCell className="align-top font-mono text-right">
                     {e.hours.toFixed(2)}
                   </TableCell>
-                  <TableCell>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={pct ?? ""}
-                      onChange={(ev) => {
-                        const val = ev.target.value
-                          ? Number(ev.target.value)
-                          : null;
-                        setPercentValues((prev) => ({
-                          ...prev,
-                          [k]: val,
-                        }));
-                      }}
-                      className="h-7 w-20 text-right font-mono text-xs"
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <select
-                      value={proj}
-                      onChange={(ev) =>
-                        setProjectValues((prev) => ({
-                          ...prev,
-                          [k]: ev.target.value || null,
-                        }))
+                  <TableCell className="align-top">
+                    <SplitsEditor
+                      splits={splits}
+                      hours={e.hours}
+                      investProjects={investProjects}
+                      onChange={(next) =>
+                        setSplitsMap((prev) => ({ ...prev, [k]: next }))
                       }
-                      className="h-7 w-full rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                    >
-                      <option value="">—</option>
-                      {investProjects.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                    </select>
-                  </TableCell>
-                  <TableCell className="font-mono text-right">
-                    {investHours != null ? investHours.toFixed(2) : "—"}
+                    />
                   </TableCell>
                 </TableRow>
               );
@@ -909,28 +1212,189 @@ function ManualPercentSection({
 }
 
 // ---------------------------------------------------------------------------
+// Per-employee FTE plan (editable)
+// ---------------------------------------------------------------------------
+
+interface EmployeeFtePlanSectionProps {
+  username: string;
+  investProjects: string[];
+  fteValues: Record<string, number | null>;
+  setFteValues: React.Dispatch<
+    React.SetStateAction<Record<string, number | null>>
+  >;
+}
+
+function EmployeeFtePlanSection({
+  username,
+  investProjects,
+  fteValues,
+  setFteValues,
+}: EmployeeFtePlanSectionProps) {
+  const totalFte = investProjects.reduce((sum, p) => {
+    const v = fteValues[`${username}::${p}`];
+    return sum + (v != null && v > 0 ? v : 0);
+  }, 0);
+
+  return (
+    <div className="rounded-lg border bg-muted/20 p-3">
+      <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        План FTE — {username}
+      </h4>
+      <p className="mb-2 text-xs text-muted-foreground">
+        Целевая загрузка по инвест-проектам. 0,2 FTE означает, что 20% часов
+        GENERAL / GBTUTORIAL относятся на этот проект. Также используется для
+        сравнения плана с фактом в отчёте.
+      </p>
+      <div className="flex flex-wrap gap-4">
+        {investProjects.map((p) => {
+          const key = `${username}::${p}`;
+          return (
+            <div key={key} className="flex items-center gap-2">
+              <label className="text-xs text-muted-foreground">{p}</label>
+              <Input
+                type="number"
+                min={0}
+                step={0.01}
+                value={fteValues[key] ?? ""}
+                onChange={(ev) => {
+                  const val = ev.target.value ? Number(ev.target.value) : null;
+                  setFteValues((prev) => ({ ...prev, [key]: val }));
+                }}
+                className="h-7 w-24 text-right font-mono text-xs"
+              />
+            </div>
+          );
+        })}
+      </div>
+      {totalFte > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Сумма FTE:{" "}
+          <span className="font-mono">{totalFte.toFixed(2)}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function getFteByProject(
+  username: string,
+  investProjects: string[],
+  fteValues: Record<string, number | null>
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const project of investProjects) {
+    const value = fteValues[`${username}::${project}`];
+    if (value != null && value > 0) {
+      result[project] = value;
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Manual project section (editable)
 // ---------------------------------------------------------------------------
 
 interface ManualProjectSectionProps {
   entries: ManualProjectEntry[];
   investProjects: string[];
-  projectValues: Record<string, string | null>;
-  setProjectValues: React.Dispatch<
-    React.SetStateAction<Record<string, string | null>>
+  splitsMap: Record<string, AllocSplit[]>;
+  setSplitsMap: React.Dispatch<
+    React.SetStateAction<Record<string, AllocSplit[]>>
   >;
 }
 
 function ManualProjectSection({
   entries,
   investProjects,
-  projectValues,
-  setProjectValues,
+  splitsMap,
+  setSplitsMap,
 }: ManualProjectSectionProps) {
   return (
     <div>
       <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
         Ручное назначение проекта
+      </h4>
+      <p className="mb-2 text-xs text-muted-foreground">
+        Можно разделить часы на несколько инвест-проектов. Если проект один
+        и процент не указан — все часы идут туда.
+      </p>
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Ключ</TableHead>
+              <TableHead>Задача</TableHead>
+              <TableHead className="text-right">Часы</TableHead>
+              <TableHead>Распределение</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {entries.map((e) => {
+              const k = `${e.username}::${e.task_key}`;
+              const splits = splitsMap[k] ?? [emptySplit()];
+
+              return (
+                <TableRow key={k}>
+                  <TableCell className="align-top font-mono text-xs">
+                    {e.task_key}
+                  </TableCell>
+                  <TableCell className="align-top max-w-[22rem] whitespace-normal break-words text-sm">
+                    {e.title}
+                  </TableCell>
+                  <TableCell className="align-top font-mono text-right">
+                    {e.hours.toFixed(2)}
+                  </TableCell>
+                  <TableCell className="align-top">
+                    <SplitsEditor
+                      splits={splits}
+                      hours={e.hours}
+                      investProjects={investProjects}
+                      onChange={(next) =>
+                        setSplitsMap((prev) => ({ ...prev, [k]: next }))
+                      }
+                    />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Keyword section (auto-match + manual override)
+// ---------------------------------------------------------------------------
+
+interface KeywordSectionProps {
+  entries: KeywordEntry[];
+  investProjects: string[];
+  splitsMap: Record<string, AllocSplit[]>;
+  setSplitsMap: React.Dispatch<
+    React.SetStateAction<Record<string, AllocSplit[]>>
+  >;
+}
+
+function KeywordSection({
+  entries,
+  investProjects,
+  splitsMap,
+  setSplitsMap,
+}: KeywordSectionProps) {
+  const sortedEntries = [...entries].sort((a, b) => {
+    const aMatched = Boolean(a.matched_project);
+    const bMatched = Boolean(b.matched_project);
+    if (aMatched === bMatched) return 0;
+    return aMatched ? -1 : 1;
+  });
+
+  return (
+    <div>
+      <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        По ключевым словам в названии задачи
       </h4>
       <div className="rounded-lg border">
         <Table>
@@ -939,41 +1403,42 @@ function ManualProjectSection({
               <TableHead>Ключ</TableHead>
               <TableHead>Задача</TableHead>
               <TableHead className="text-right">Часы</TableHead>
-              <TableHead className="w-32">Проект</TableHead>
+              <TableHead>Распределение</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {entries.map((e) => {
+            {sortedEntries.map((e) => {
               const k = `${e.username}::${e.task_key}`;
-              const proj = projectValues[k] ?? "";
+              const autoMatched = e.matched_project;
+              const splits = splitsMap[k] ?? [emptySplit()];
 
               return (
-                <TableRow key={k}>
-                  <TableCell className="font-mono text-xs">
+                <TableRow
+                  key={k}
+                  className={autoMatched ? "bg-emerald-50/50 dark:bg-emerald-950/20" : undefined}
+                >
+                  <TableCell className="align-top font-mono text-xs">
                     {e.task_key}
                   </TableCell>
-                  <TableCell className="text-sm">{e.title}</TableCell>
-                  <TableCell className="font-mono text-right">
+                  <TableCell className="align-top max-w-[22rem] whitespace-normal break-words text-sm">
+                    {e.title}
+                  </TableCell>
+                  <TableCell className="align-top font-mono text-right">
                     {e.hours.toFixed(2)}
                   </TableCell>
-                  <TableCell>
-                    <select
-                      value={proj}
-                      onChange={(ev) =>
-                        setProjectValues((prev) => ({
-                          ...prev,
-                          [k]: ev.target.value || null,
-                        }))
-                      }
-                      className="h-7 w-full rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                    >
-                      <option value="">—</option>
-                      {investProjects.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                    </select>
+                  <TableCell className="align-top">
+                    {autoMatched ? (
+                      <span className="text-xs font-medium">{autoMatched}</span>
+                    ) : (
+                      <SplitsEditor
+                        splits={splits}
+                        hours={e.hours}
+                        investProjects={investProjects}
+                        onChange={(next) =>
+                          setSplitsMap((prev) => ({ ...prev, [k]: next }))
+                        }
+                      />
+                    )}
                   </TableCell>
                 </TableRow>
               );
@@ -981,6 +1446,80 @@ function ManualProjectSection({
           </TableBody>
         </Table>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Plan FTE section (read-only preview)
+// ---------------------------------------------------------------------------
+
+interface PlanFteSectionProps {
+  username: string;
+  entries: PlanFteEntry[];
+  investProjects: string[];
+  fteValues: Record<string, number | null>;
+}
+
+function PlanFteSection({
+  username,
+  entries,
+  investProjects,
+  fteValues,
+}: PlanFteSectionProps) {
+  const fteByProject = getFteByProject(username, investProjects, fteValues);
+  const hasFte = Object.keys(fteByProject).length > 0;
+
+  return (
+    <div>
+      <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Распределение по плану FTE
+      </h4>
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Ключ</TableHead>
+              <TableHead>Задача</TableHead>
+              <TableHead className="text-right">Часы</TableHead>
+              <TableHead className="text-right">Инвест-часы</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {entries.map((e) => (
+                <TableRow key={`${e.username}::${e.task_key}`}>
+                  <TableCell className="font-mono text-xs">
+                    {e.task_key}
+                  </TableCell>
+                  <TableCell className="max-w-[28rem] whitespace-normal break-words text-sm">
+                  {e.title}
+                </TableCell>
+                  <TableCell className="font-mono text-right">
+                    {e.hours.toFixed(2)}
+                  </TableCell>
+                  <TableCell className="font-mono text-right text-xs">
+                    {hasFte ? (
+                      <div className="space-y-0.5">
+                        {Object.entries(fteByProject).map(([proj, fte]) => (
+                          <div key={proj}>
+                            {proj}: {(e.hours * fte).toFixed(2)} ч
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      "—"
+                    )}
+                  </TableCell>
+                </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      {!hasFte && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Введите плановые FTE для этого сотрудника, чтобы увидеть распределение.
+        </p>
+      )}
     </div>
   );
 }
@@ -991,16 +1530,16 @@ function ManualProjectSection({
 
 interface StepThreeProps {
   investData: InvestData | null;
-  percentValues: Record<string, number | null>;
-  projectValues: Record<string, string | null>;
+  splitsMap: Record<string, AllocSplit[]>;
+  fteValues: Record<string, number | null>;
   saveSuccess: boolean;
   onBack: () => void;
 }
 
 function StepThree({
   investData,
-  percentValues,
-  projectValues,
+  splitsMap,
+  fteValues,
   saveSuccess,
   onBack,
 }: StepThreeProps) {
@@ -1027,24 +1566,46 @@ function StepThree({
 
   for (const e of investData.manual_percent_entries) {
     const k = `${e.username}::${e.task_key}`;
-    const pct = percentValues[k];
-    const proj = projectValues[k];
-    if (pct != null && proj) {
-      ensure(proj);
-      summary[proj].manual += (e.hours * pct) / 100;
+    for (const part of splitHours(e.hours, splitsMap[k] ?? [])) {
+      ensure(part.project);
+      summary[part.project].manual += part.hours;
     }
   }
 
   for (const e of investData.manual_project_entries) {
     const k = `${e.username}::${e.task_key}`;
-    const proj = projectValues[k];
-    if (proj) {
-      ensure(proj);
-      summary[proj].manual += e.hours;
+    for (const part of splitHours(e.hours, splitsMap[k] ?? [])) {
+      ensure(part.project);
+      summary[part.project].manual += part.hours;
     }
   }
 
-  const projects = Object.keys(summary).sort();
+  for (const e of investData.keyword_entries) {
+    if (e.matched_project) {
+      ensure(e.matched_project);
+      summary[e.matched_project].manual += e.hours;
+    } else {
+      const k = `${e.username}::${e.task_key}`;
+      for (const part of splitHours(e.hours, splitsMap[k] ?? [])) {
+        ensure(part.project);
+        summary[part.project].manual += part.hours;
+      }
+    }
+  }
+
+  for (const e of investData.plan_fte_entries) {
+    const fteByProject = getFteByProject(
+      e.username,
+      investData.invest_projects,
+      fteValues
+    );
+    for (const [proj, fte] of Object.entries(fteByProject)) {
+      ensure(proj);
+      summary[proj].manual += e.hours * fte;
+    }
+  }
+
+  const projects = sortInvestProjects(Object.keys(summary));
   const totals = { auto: 0, buh: 0, manual: 0, total: 0 };
   for (const p of projects) {
     totals.auto += summary[p].auto;
@@ -1054,52 +1615,7 @@ function StepThree({
       summary[p].auto + summary[p].buh + summary[p].manual;
   }
 
-  // Per-employee breakdown: how many hours each employee spent on each
-  // invest direction (across auto / BUH / manual allocations).
-  const byEmployeeProject: Record<string, number> = {};
-  const addEmployeeHours = (
-    username: string,
-    project: string,
-    hours: number
-  ) => {
-    const k = `${username}::${project}`;
-    byEmployeeProject[k] = (byEmployeeProject[k] ?? 0) + hours;
-  };
-
-  for (const e of investData.auto_entries) {
-    addEmployeeHours(e.username, e.invest_project, e.hours);
-  }
-  for (const e of investData.buh_entries) {
-    if (e.invest_project) {
-      addEmployeeHours(e.username, e.invest_project, e.hours);
-    }
-  }
-  for (const e of investData.manual_percent_entries) {
-    const k = `${e.username}::${e.task_key}`;
-    const pct = percentValues[k];
-    const proj = projectValues[k];
-    if (pct != null && proj) {
-      addEmployeeHours(e.username, proj, (e.hours * pct) / 100);
-    }
-  }
-  for (const e of investData.manual_project_entries) {
-    const k = `${e.username}::${e.task_key}`;
-    const proj = projectValues[k];
-    if (proj) {
-      addEmployeeHours(e.username, proj, e.hours);
-    }
-  }
-
-  const employeeRows = Object.entries(byEmployeeProject)
-    .map(([k, hours]) => {
-      const [username, project] = k.split("::");
-      return { username, project, hours };
-    })
-    .sort(
-      (a, b) =>
-        a.username.localeCompare(b.username) ||
-        a.project.localeCompare(b.project)
-    );
+  const projectGroups = groupPlanVsFactByProject(investData.plan_vs_fact);
 
   return (
     <>
@@ -1108,6 +1624,109 @@ function StepThree({
           Распределение сохранено
         </div>
       )}
+
+      <div>
+        <h3 className="mb-3 text-sm font-medium">Итоги по проектам</h3>
+        {projectGroups.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Нет распределённых инвест-часов. Введите план FTE и сохраните
+            распределение, чтобы увидеть сравнение.
+          </p>
+        ) : (
+          <div className="space-y-6">
+            {projectGroups.map((group) => {
+              const highlightTotal =
+                group.deltaFte != null && Math.abs(group.deltaFte) > 0.05;
+              return (
+                <div key={group.project} className="rounded-lg border">
+                  <div className="border-b bg-muted/30 px-4 py-3">
+                    <p className="text-sm font-medium">{group.project}</p>
+                  </div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Сотрудник</TableHead>
+                        <TableHead className="text-right">План, ч</TableHead>
+                        <TableHead className="text-right">План FTE</TableHead>
+                        <TableHead className="text-right">Факт, ч</TableHead>
+                        <TableHead className="text-right">Факт FTE</TableHead>
+                        <TableHead className="text-right">
+                          Разница, ч
+                        </TableHead>
+                        <TableHead className="text-right">
+                          Разница FTE
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {group.people.map((r) => (
+                        <TableRow
+                          key={`${r.username}::${r.invest_project}`}
+                          className={
+                            r.delta_fte != null && Math.abs(r.delta_fte) > 0.05
+                              ? "bg-amber-50/50 dark:bg-amber-950/20"
+                              : undefined
+                          }
+                        >
+                          <TableCell className="font-medium">
+                            {r.username}
+                          </TableCell>
+                          <TableCell className="font-mono text-right">
+                            {fmtMetric(r.plan_hours)}
+                          </TableCell>
+                          <TableCell className="font-mono text-right">
+                            {fmtMetric(r.plan_fte)}
+                          </TableCell>
+                          <TableCell className="font-mono text-right">
+                            {fmtMetric(r.fact_hours)}
+                          </TableCell>
+                          <TableCell className="font-mono text-right">
+                            {fmtMetric(r.fact_fte)}
+                          </TableCell>
+                          <TableCell className="font-mono text-right">
+                            {fmtMetric(r.delta_hours)}
+                          </TableCell>
+                          <TableCell className="font-mono text-right">
+                            {fmtMetric(r.delta_fte)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow
+                        className={cn(
+                          "font-semibold",
+                          highlightTotal
+                            ? "bg-amber-50/70 dark:bg-amber-950/20"
+                            : "bg-muted/30"
+                        )}
+                      >
+                        <TableCell>Итого</TableCell>
+                        <TableCell className="font-mono text-right">
+                          {fmtMetric(group.planHours)}
+                        </TableCell>
+                        <TableCell className="font-mono text-right">
+                          {fmtMetric(group.planFte)}
+                        </TableCell>
+                        <TableCell className="font-mono text-right">
+                          {fmtMetric(group.factHours)}
+                        </TableCell>
+                        <TableCell className="font-mono text-right">
+                          {fmtMetric(group.factFte)}
+                        </TableCell>
+                        <TableCell className="font-mono text-right">
+                          {fmtMetric(group.deltaHours)}
+                        </TableCell>
+                        <TableCell className="font-mono text-right">
+                          {fmtMetric(group.deltaFte)}
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <div>
         <h3 className="mb-3 text-sm font-medium">
@@ -1168,44 +1787,6 @@ function StepThree({
             </TableBody>
           </Table>
         </div>
-      </div>
-
-      <div>
-        <h3 className="mb-3 text-sm font-medium">
-          Инвест-часы по сотрудникам
-        </h3>
-        {employeeRows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Нет распределённых инвест-часов.
-          </p>
-        ) : (
-          <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Сотрудник</TableHead>
-                  <TableHead>Инвест-направление</TableHead>
-                  <TableHead className="text-right">
-                    Количество часов
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {employeeRows.map((r) => (
-                  <TableRow key={`${r.username}::${r.project}`}>
-                    <TableCell className="font-medium">
-                      {r.username}
-                    </TableCell>
-                    <TableCell>{r.project}</TableCell>
-                    <TableCell className="font-mono text-right">
-                      {r.hours.toFixed(2)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
       </div>
 
       <div className="flex justify-start">

@@ -9,6 +9,7 @@ class UploadResponse(BaseModel):
     uploaded_at: datetime
     row_count: int
     status: str
+    error_message: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -19,5 +20,6 @@ class UploadListItem(BaseModel):
     uploaded_at: datetime
     row_count: int
     status: str
+    error_message: str | None = None
 
     model_config = {"from_attributes": True}

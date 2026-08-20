@@ -14,6 +14,7 @@ from app.models.invest_allocation import (
     BuhCompanyMapping,
     InvestAllocation,
     InvestEmployeeSelection,
+    InvestFtePlan,
 )
 from app.models.upload import Upload
 from app.models.worklog import WorklogEntry
@@ -21,12 +22,16 @@ from app.services.buh_company import (
     merge_buh_companies,
     resolve_invest_project,
 )
+from app.services.invest_summary import aggregate_invest_hours, group_saved_allocations
 from app.services.permitted_tasks import (
     INVEST_AUTO,
     INVEST_BUH_COMPANY,
+    INVEST_KEYWORD,
     INVEST_MANUAL_PERCENT,
     INVEST_MANUAL_PROJECT,
+    INVEST_PLAN_FTE,
     load_permitted_tasks,
+    sort_invest_projects,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,10 +60,6 @@ class AllocationEntry(BaseModel):
     invest_project: str
     percentage: float
     allocation_type: str
-
-
-class AllocationPayload(BaseModel):
-    allocations: list[AllocationEntry]
 
 
 class AutoEntry(BaseModel):
@@ -95,6 +96,43 @@ class ManualProjectEntry(BaseModel):
     invest_project: str | None = None
 
 
+class KeywordEntry(BaseModel):
+    username: str
+    task_key: str
+    title: str
+    hours: float
+    matched_project: str | None = None
+
+
+class PlanFteEntry(BaseModel):
+    username: str
+    task_key: str
+    title: str
+    hours: float
+
+
+class FtePlanItem(BaseModel):
+    username: str
+    invest_project: str
+    fte_value: float
+
+
+class PlanVsFactEntry(BaseModel):
+    username: str
+    invest_project: str
+    plan_fte: float | None = None
+    plan_hours: float | None = None
+    fact_hours: float
+    fact_fte: float | None = None
+    delta_fte: float | None = None
+    delta_hours: float | None = None
+
+
+class ExpectedHoursEntry(BaseModel):
+    username: str
+    expected_hours: float
+
+
 class SavedAllocationItem(BaseModel):
     username: str
     task_key: str
@@ -110,8 +148,19 @@ class InvestDataResponse(BaseModel):
     buh_entries: list[BuhEntry]
     manual_percent_entries: list[ManualPercentEntry]
     manual_project_entries: list[ManualProjectEntry]
+    keyword_entries: list[KeywordEntry]
+    plan_fte_entries: list[PlanFteEntry]
+    fte_plans: list[FtePlanItem]
+    plan_vs_fact: list[PlanVsFactEntry]
+    expected_hours: list[ExpectedHoursEntry]
+    selected_employees: list[str]
     saved_allocations: list[SavedAllocationItem]
     invest_projects: list[str]
+
+
+class AllocationPayload(BaseModel):
+    allocations: list[AllocationEntry]
+    fte_plans: list[FtePlanItem] = []
 
 
 class BuhCsvUploadResult(BaseModel):
@@ -260,6 +309,12 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
             buh_entries=[],
             manual_percent_entries=[],
             manual_project_entries=[],
+            keyword_entries=[],
+            plan_fte_entries=[],
+            fte_plans=[],
+            plan_vs_fact=[],
+            expected_hours=[],
+            selected_employees=[],
             saved_allocations=[],
             invest_projects=[],
         )
@@ -287,18 +342,30 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
         .filter(InvestAllocation.upload_id == upload_id)
         .all()
     )
-    saved_alloc_key: dict[tuple[str, str], InvestAllocation] = {
-        (r.username, r.task_key): r for r in saved_alloc_rows
-    }
+    saved_alloc_key = group_saved_allocations(saved_alloc_rows)
+
+    def _first_saved(username: str, task_key: str) -> InvestAllocation | None:
+        items = saved_alloc_key.get((username, task_key), [])
+        return items[0] if items else None
+
+    fte_plan_rows = (
+        db.query(InvestFtePlan)
+        .filter(InvestFtePlan.upload_id == upload_id)
+        .all()
+    )
 
     auto_entries: list[AutoEntry] = []
     buh_entries: list[BuhEntry] = []
     manual_percent_entries: list[ManualPercentEntry] = []
     manual_project_entries: list[ManualProjectEntry] = []
+    keyword_entries: list[KeywordEntry] = []
+    plan_fte_entries: list[PlanFteEntry] = []
     invest_projects_set: set[str] = set()
 
     seen_manual_percent: set[tuple[str, str]] = set()
     seen_manual_project: set[tuple[str, str]] = set()
+    seen_keyword: set[tuple[str, str]] = set()
+    seen_plan_fte: set[tuple[str, str]] = set()
     seen_auto: set[tuple[str, str]] = set()
     seen_buh: set[tuple[str, str]] = set()
 
@@ -350,7 +417,7 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
                         be.hours = round(be.hours + wl.hours, 2)
                         break
             else:
-                saved = saved_alloc_key.get((wl.username, wl.key))
+                saved = _first_saved(wl.username, wl.key)
                 if k not in seen_manual_project:
                     seen_manual_project.add(k)
                     manual_project_entries.append(
@@ -369,7 +436,7 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
 
         elif alloc_type == INVEST_MANUAL_PERCENT:
             k = (wl.username, wl.key)
-            saved = saved_alloc_key.get(k)
+            saved = _first_saved(wl.username, wl.key)
             if k not in seen_manual_percent:
                 seen_manual_percent.add(k)
                 manual_percent_entries.append(
@@ -389,7 +456,7 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
 
         elif alloc_type == INVEST_MANUAL_PROJECT:
             k = (wl.username, wl.key)
-            saved = saved_alloc_key.get(k)
+            saved = _first_saved(wl.username, wl.key)
             if k not in seen_manual_project:
                 seen_manual_project.add(k)
                 manual_project_entries.append(
@@ -406,6 +473,51 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
                     mp.hours = round(mp.hours + wl.hours, 2)
                     break
 
+        elif alloc_type == INVEST_KEYWORD:
+            matched = registry.resolve_keyword_invest(
+                wl.project, wl.task_type, wl.title
+            )
+            k = (wl.username, wl.key)
+            saved = _first_saved(wl.username, wl.key)
+            if matched:
+                invest_projects_set.add(matched)
+            elif saved:
+                invest_projects_set.add(saved.invest_project)
+            if k not in seen_keyword:
+                seen_keyword.add(k)
+                keyword_entries.append(
+                    KeywordEntry(
+                        username=wl.username,
+                        task_key=wl.key,
+                        title=wl.title,
+                        hours=0.0,
+                        matched_project=matched,
+                    )
+                )
+            for ke in keyword_entries:
+                if ke.username == wl.username and ke.task_key == wl.key:
+                    ke.hours = round(ke.hours + wl.hours, 2)
+                    if not ke.matched_project and matched:
+                        ke.matched_project = matched
+                    break
+
+        elif alloc_type == INVEST_PLAN_FTE:
+            k = (wl.username, wl.key)
+            if k not in seen_plan_fte:
+                seen_plan_fte.add(k)
+                plan_fte_entries.append(
+                    PlanFteEntry(
+                        username=wl.username,
+                        task_key=wl.key,
+                        title=wl.title,
+                        hours=0.0,
+                    )
+                )
+            for pe in plan_fte_entries:
+                if pe.username == wl.username and pe.task_key == wl.key:
+                    pe.hours = round(pe.hours + wl.hours, 2)
+                    break
+
     saved_allocations = [
         SavedAllocationItem.model_validate(r)
         for r in saved_alloc_rows
@@ -414,6 +526,9 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
 
     for sa in saved_alloc_rows:
         invest_projects_set.add(sa.invest_project)
+
+    for fp in fte_plan_rows:
+        invest_projects_set.add(fp.invest_project)
 
     # Always offer concrete directions from the rules file (MENA, Alphyn, …)
     # so manual % / project pickers can target them even when no auto rows
@@ -426,13 +541,63 @@ def get_invest_data(upload_id: int, db: Session = Depends(get_db)):
     if not invest_projects_set:
         invest_projects_set.add("MENA")
 
+    all_worklogs = (
+        db.query(WorklogEntry)
+        .filter(WorklogEntry.upload_id == upload_id)
+        .all()
+    )
+    fte_by_user: dict[str, dict[str, float]] = defaultdict(dict)
+    for r in fte_plan_rows:
+        if r.fte_value > 0:
+            fte_by_user[r.username][r.invest_project] = r.fte_value
+
+    invest_result = aggregate_invest_hours(
+        worklogs=all_worklogs,
+        selected_users=selected_users,
+        registry=registry,
+        buh_map=buh_map,
+        saved_alloc=saved_alloc_key,
+        fte_by_user=fte_by_user,
+        auto_agg={},
+        buh_agg={},
+        manual_agg={},
+    )
+
     return InvestDataResponse(
         auto_entries=auto_entries,
         buh_entries=buh_entries,
         manual_percent_entries=manual_percent_entries,
         manual_project_entries=manual_project_entries,
+        keyword_entries=keyword_entries,
+        plan_fte_entries=plan_fte_entries,
+        fte_plans=[
+            FtePlanItem(
+                username=r.username,
+                invest_project=r.invest_project,
+                fte_value=r.fte_value,
+            )
+            for r in fte_plan_rows
+        ],
+        plan_vs_fact=[
+            PlanVsFactEntry(
+                username=r.username,
+                invest_project=r.invest_project,
+                plan_fte=r.plan_fte,
+                plan_hours=r.plan_hours,
+                fact_hours=r.fact_hours,
+                fact_fte=r.fact_fte,
+                delta_fte=r.delta_fte,
+                delta_hours=r.delta_hours,
+            )
+            for r in invest_result.plan_vs_fact
+        ],
+        expected_hours=[
+            ExpectedHoursEntry(username=u, expected_hours=h)
+            for u, h in sorted(invest_result.expected_by_user.items())
+        ],
+        selected_employees=sorted(selected_users),
         saved_allocations=saved_allocations,
-        invest_projects=sorted(invest_projects_set),
+        invest_projects=sort_invest_projects(invest_projects_set),
     )
 
 
@@ -449,6 +614,10 @@ def save_invest_allocations(
         InvestAllocation.upload_id == upload_id
     ).delete()
 
+    db.query(InvestFtePlan).filter(
+        InvestFtePlan.upload_id == upload_id
+    ).delete()
+
     for a in payload.allocations:
         db.add(
             InvestAllocation(
@@ -461,5 +630,20 @@ def save_invest_allocations(
             )
         )
 
+    for fp in payload.fte_plans:
+        if fp.fte_value > 0 and fp.username:
+            db.add(
+                InvestFtePlan(
+                    upload_id=upload_id,
+                    username=fp.username,
+                    invest_project=fp.invest_project,
+                    fte_value=fp.fte_value,
+                )
+            )
+
     db.commit()
-    return {"status": "ok", "count": len(payload.allocations)}
+    return {
+        "status": "ok",
+        "count": len(payload.allocations),
+        "fte_plans": len(payload.fte_plans),
+    }

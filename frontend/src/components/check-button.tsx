@@ -7,6 +7,7 @@ import {
   runChecks,
   getResults,
   getUploadStatus,
+  isNetworkError,
   type CheckSummary,
 } from "@/lib/api";
 
@@ -36,9 +37,17 @@ export function CheckButton({
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       if (abortRef.current) return;
 
-      const upload = await getUploadStatus(uploadId);
-      if (upload.status === "checked") return;
-      if (upload.status === "error") throw new Error("Проверка завершилась с ошибкой на сервере");
+      try {
+        const upload = await getUploadStatus(uploadId);
+        if (upload.status === "checked") return;
+        if (upload.status === "error") {
+          throw new Error(
+            upload.error_message || "Проверка завершилась с ошибкой на сервере"
+          );
+        }
+      } catch (err) {
+        if (!isNetworkError(err)) throw err;
+      }
     }
 
     throw new Error("Превышено время ожидания проверки");

@@ -16,6 +16,7 @@ class Upload(Base):
     )
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String, default="parsed")
+    error_message: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
     worklogs = relationship("WorklogEntry", back_populates="upload", cascade="all, delete-orphan")
     check_results = relationship("CheckResult", back_populates="upload", cascade="all, delete-orphan")

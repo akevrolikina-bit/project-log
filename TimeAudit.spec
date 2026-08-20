@@ -26,7 +26,7 @@ hiddenimports += collect_submodules("app")
 datas = [
     ("frontend/out", "frontend/out"),
     ("backend/.env", "backend"),
-    ("data/input/Issues CHANGE (2).xlsx", "data/input"),
+    ("data/input/Issues CHANGE (3).xlsx", "data/input"),
     ("backend/config/employee_countries.json", "config"),
 ]
 

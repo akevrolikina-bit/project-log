@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
+import traceback
 from collections import defaultdict
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import DATA_DIR
 from app.database import SessionLocal, get_db
 from app.models.check_result import CheckResult
 from app.models.upload import Upload
@@ -24,16 +26,78 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/uploads", tags=["checks"])
 
 
+def _user_facing_check_error(exc: BaseException) -> str:
+    """Turn a technical exception into a short message the user can act on."""
+    if isinstance(exc, PermissionError):
+        return (
+            "Не получилось прочитать файл со списком разрешённых задач. "
+            "Закройте его в Excel, если он открыт, и нажмите проверку ещё раз."
+        )
+    if isinstance(exc, FileNotFoundError):
+        return (
+            "Не найден файл со списком разрешённых задач. "
+            "Положите его в папку data/input и повторите проверку."
+        )
+    text = str(exc).lower()
+    if "database is locked" in text or "database locked" in text:
+        return (
+            "База данных была занята. Подождите несколько секунд "
+            "и нажмите проверку ещё раз."
+        )
+    return "Проверка завершилась с ошибкой на сервере. Попробуйте ещё раз."
+
+
+def _remember_check_error(upload_id: int) -> None:
+    """Write the last check traceback to disk for debugging."""
+    log_path: Path = DATA_DIR / "last_check_error.txt"
+    log_path.write_text(
+        f"upload_id={upload_id}\n{traceback.format_exc()}",
+        encoding="utf-8",
+    )
+
+
+def reset_interrupted_checks() -> None:
+    """Mark in-progress checks as failed after a server restart.
+
+    Checks run in a background thread. If the process reloads (for example
+    because a Python file changed), that thread is killed and the upload
+    would otherwise stay stuck on ``checking`` forever.
+    """
+    db = SessionLocal()
+    try:
+        stuck = db.query(Upload).filter(Upload.status == "checking").all()
+        if not stuck:
+            return
+        for upload in stuck:
+            upload.status = "error"
+            upload.error_message = (
+                "Проверка прервалась. Нажмите проверку ещё раз."
+            )
+        db.commit()
+        logger.info("Reset %d interrupted check(s)", len(stuck))
+    except Exception:
+        logger.exception("Could not reset interrupted checks")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def _run_checks_in_background(upload_id: int) -> None:
     """Execute checks in a background thread with its own DB session."""
     db = SessionLocal()
     try:
         run_checks(upload_id, db)
-    except Exception:
+    except Exception as exc:
         logger.exception("Background check failed for upload %d", upload_id)
+        try:
+            _remember_check_error(upload_id)
+        except Exception:
+            logger.exception("Could not write last_check_error.txt")
+        db.rollback()
         upload = db.query(Upload).filter(Upload.id == upload_id).first()
         if upload:
             upload.status = "error"
+            upload.error_message = _user_facing_check_error(exc)
             db.commit()
     finally:
         db.close()
@@ -47,6 +111,7 @@ def execute_checks(upload_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Upload not found.")
 
     upload.status = "checking"
+    upload.error_message = None
     db.commit()
 
     thread = threading.Thread(

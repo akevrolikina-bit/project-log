@@ -22,15 +22,27 @@ HOST = "127.0.0.1"
 PREFERRED_PORT = 8001
 
 
+def _port_is_busy(host: str, port: int) -> bool:
+    """True when something already accepts connections on host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
 def _pick_port(preferred: int) -> int:
-    """Return the preferred port if free, otherwise an OS-assigned free port."""
+    """Return the preferred port if free, otherwise an OS-assigned free port.
+
+    Probe by connecting, not only by binding 127.0.0.1. Binding 127.0.0.1 can
+    succeed even when another process already listens on 0.0.0.0:preferred
+    (typical ``npm run backend``), and then two servers share the port.
+    """
+    if not _port_is_busy("127.0.0.1", preferred):
+        return preferred
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind((HOST, preferred))
-            return preferred
-        except OSError:
-            probe.bind((HOST, 0))
-            return probe.getsockname()[1]
+        probe.bind((HOST, 0))
+        return probe.getsockname()[1]
 
 
 def _open_browser_when_ready(port: int) -> None:

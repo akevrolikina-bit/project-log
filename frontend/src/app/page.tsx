@@ -69,11 +69,12 @@ export default function Home() {
   const showResults = summaries.length > 0 || isLoadingResults;
 
   return (
-    <div className="mx-auto w-full max-w-[1100px] px-6 py-10">
+    <div className="mx-auto w-full max-w-[1600px] px-6 py-10 lg:px-10">
       <header className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight">TimeAudit</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Загрузите файл из Jira для проверки рабочего времени
+          Загрузите файл из Jira. Можно проверить время или сразу распределить
+          часы по инвест-проектам.
         </p>
       </header>
 
@@ -95,24 +96,34 @@ export default function Home() {
             onCheckComplete={handleCheckComplete}
             disabled={entries.length === 0}
           />
-          {upload.status === "checked" && (
-            <DownloadButton uploadId={upload.id} />
-          )}
+          <DownloadButton uploadId={upload.id} />
         </section>
       )}
 
-      <section className="mb-8">
-        <WorklogTable entries={entries} isLoading={isLoadingWorklogs} />
+      <section className="mb-10">
+        <WorklogTable
+          entries={entries}
+          isLoading={isLoadingWorklogs}
+          defaultCollapsed={Boolean(upload)}
+        />
       </section>
 
       {showResults && (
-        <section>
+        <section className="mb-10">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            1 · Проверка времени
+          </p>
           <CheckResults summaries={summaries} isLoading={isLoadingResults} />
         </section>
       )}
 
-      {upload && upload.status === "checked" && (
-        <section className="mt-8">
+      {upload && (
+        <section className="mb-4">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            {showResults
+              ? "2 · Распределение по проектам"
+              : "Распределение по проектам"}
+          </p>
           <InvestPanel uploadId={upload.id} />
         </section>
       )}

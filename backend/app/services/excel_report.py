@@ -30,17 +30,19 @@ from app.models.invest_allocation import (
     BuhCompanyMapping,
     InvestAllocation,
     InvestEmployeeSelection,
+    InvestFtePlan,
 )
+from app.models.upload import Upload
 from app.models.worklog import WorklogEntry
 from app.services.calendar import get_expected_hours
 from app.services.employee_country import get_country
-from app.services.permitted_tasks import (
-    INVEST_AUTO,
-    INVEST_BUH_COMPANY,
-    INVEST_MANUAL_PERCENT,
-    INVEST_MANUAL_PROJECT,
-    load_permitted_tasks,
+from app.services.invest_summary import (
+    aggregate_invest_hours,
+    format_project_total_line,
+    group_plan_vs_fact_by_project,
+    group_saved_allocations,
 )
+from app.services.permitted_tasks import load_permitted_tasks, sort_invest_projects
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +170,13 @@ def _register_styles(wb: Workbook) -> None:
             border=_THIN_BORDER,
             alignment=_ALIGN_CENTER,
         ),
+        NamedStyle(
+            name="ta_status_unchecked",
+            font=_FONT_LABEL,
+            fill=_FILL_TABLE_HEADER,
+            border=_THIN_BORDER,
+            alignment=_ALIGN_CENTER,
+        ),
     ]
 
     for s in styles:
@@ -200,6 +209,7 @@ def _build_summary_sheet(
     ws,
     wl_by_user: dict[str, list[WorklogEntry]],
     cr_by_user: dict[str, list[CheckResult]],
+    checks_completed: bool = True,
 ) -> None:
     """Build the 'Сводка' sheet — one row per employee with hours/status overview."""
 
@@ -235,14 +245,16 @@ def _build_summary_sheet(
 
         has_error = any(cr.severity == "error" for cr in user_cr)
         has_warning = any(cr.severity == "warning" for cr in user_cr)
-        if has_error:
+        if not checks_completed:
+            status = "Не проверялось"
+        elif has_error:
             status = "Ошибка"
         elif has_warning:
             status = "Внимание"
         else:
             status = "OK"
 
-        issue_count = len(user_cr)
+        issue_count = "—" if not checks_completed else len(user_cr)
         total_actual += actual
         total_expected += expected
         total_downtime += downtime
@@ -273,6 +285,8 @@ def _build_summary_sheet(
             status_cell.style = "ta_status_error"
         elif status == "Внимание":
             status_cell.style = "ta_status_warning"
+        elif status == "Не проверялось":
+            status_cell.style = "ta_status_unchecked"
         else:
             status_cell.style = "ta_status_ok"
 
@@ -797,98 +811,34 @@ def _build_invest_sheet(
         .filter(InvestAllocation.upload_id == upload_id)
         .all()
     )
-    saved_alloc: dict[tuple[str, str], InvestAllocation] = {
-        (r.username, r.task_key): r for r in saved_alloc_rows
-    }
+    saved_alloc = group_saved_allocations(saved_alloc_rows)
 
-    auto_agg: dict[tuple[str, str], _AutoRow] = {}
-    buh_agg: dict[tuple[str, str], _BuhRow] = {}
-    manual_agg: dict[tuple[str, str], _ManualRow] = {}
+    fte_plan_rows = (
+        db.query(InvestFtePlan)
+        .filter(InvestFtePlan.upload_id == upload_id)
+        .all()
+    )
+    fte_by_user: dict[str, dict[str, float]] = defaultdict(dict)
+    for r in fte_plan_rows:
+        if r.fte_value > 0:
+            fte_by_user[r.username][r.invest_project] = r.fte_value
 
-    user_worklogs = [wl for wl in worklogs if wl.username in selected_users]
-
-    for wl in user_worklogs:
-        info = registry.get_invest_info(wl.key, wl.project, wl.task_type)
-        if info is None:
-            continue
-
-        direction, alloc_type = info
-        k = (wl.username, wl.key)
-
-        if alloc_type == INVEST_AUTO:
-            if k in auto_agg:
-                auto_agg[k].hours += wl.hours
-            else:
-                auto_agg[k] = _AutoRow(
-                    username=wl.username,
-                    task_key=wl.key,
-                    title=wl.title,
-                    hours=wl.hours,
-                    invest_project=direction,
-                )
-
-        elif alloc_type == INVEST_BUH_COMPANY:
-            buh_entry = buh_map.get(wl.key)
-            if buh_entry and buh_entry.invest_project:
-                if k in buh_agg:
-                    buh_agg[k].hours += wl.hours
-                else:
-                    buh_agg[k] = _BuhRow(
-                        username=wl.username,
-                        task_key=wl.key,
-                        title=wl.title,
-                        hours=wl.hours,
-                        buh_company=buh_entry.buh_company,
-                        invest_project=buh_entry.invest_project,
-                    )
-            else:
-                sa = saved_alloc.get(k)
-                if k in buh_agg:
-                    buh_agg[k].hours += wl.hours
-                else:
-                    buh_agg[k] = _BuhRow(
-                        username=wl.username,
-                        task_key=wl.key,
-                        title=wl.title,
-                        hours=wl.hours,
-                        buh_company=buh_entry.buh_company if buh_entry else "",
-                        invest_project=sa.invest_project if sa else None,
-                        manual_assigned=sa is not None,
-                    )
-
-        elif alloc_type == INVEST_MANUAL_PERCENT:
-            sa = saved_alloc.get(k)
-            if k in manual_agg:
-                manual_agg[k].hours += wl.hours
-            else:
-                manual_agg[k] = _ManualRow(
-                    username=wl.username,
-                    task_key=wl.key,
-                    title=wl.title,
-                    hours=wl.hours,
-                    percentage=sa.percentage if sa else None,
-                    invest_project=sa.invest_project if sa else None,
-                    allocation_type="manual_percent",
-                )
-
-        elif alloc_type == INVEST_MANUAL_PROJECT:
-            sa = saved_alloc.get(k)
-            if k in manual_agg:
-                manual_agg[k].hours += wl.hours
-            else:
-                manual_agg[k] = _ManualRow(
-                    username=wl.username,
-                    task_key=wl.key,
-                    title=wl.title,
-                    hours=wl.hours,
-                    percentage=100.0 if sa else None,
-                    invest_project=sa.invest_project if sa else None,
-                    allocation_type="manual_project",
-                )
-
-    auto_rows = sorted(auto_agg.values(), key=lambda r: (r.username, r.task_key))
-    buh_rows = sorted(buh_agg.values(), key=lambda r: (r.username, r.task_key))
-    manual_rows = sorted(manual_agg.values(), key=lambda r: (r.username, r.task_key))
+    invest_result = aggregate_invest_hours(
+        worklogs=worklogs,
+        selected_users=selected_users,
+        registry=registry,
+        buh_map=buh_map,
+        saved_alloc=saved_alloc,
+        fte_by_user=fte_by_user,
+        auto_agg={},
+        buh_agg={},
+        manual_agg={},
+    )
+    auto_rows = invest_result.auto_rows
+    buh_rows = invest_result.buh_rows
+    manual_rows = invest_result.manual_rows
+    plan_vs_fact = invest_result.plan_vs_fact
+    project_blocks = group_plan_vs_fact_by_project(plan_vs_fact)
 
     # --- Compute summary totals per invest project ---
     summary: dict[str, dict[str, float]] = defaultdict(lambda: {
@@ -924,7 +874,7 @@ def _build_invest_sheet(
     current_row += 1
 
     grand_auto = grand_buh = grand_manual = grand_total = 0.0
-    for proj_name in sorted(summary.keys()):
+    for proj_name in sort_invest_projects(summary.keys()):
         s = summary[proj_name]
         total = s["auto"] + s["buh"] + s["manual"]
         _write_row(ws, current_row, [
@@ -1004,50 +954,75 @@ def _build_invest_sheet(
         cell.font = _FONT_SUBHEADER
     current_row += 2
 
-    # === SECTION 1c: Hours per employee and invest direction ===
+    # === SECTION 1c: Plan vs fact grouped by invest project ===
     ws.cell(
-        row=current_row, column=1, value="Инвест-часы по сотрудникам"
+        row=current_row, column=1, value="Итоги по проектам"
     ).style = "ta_subheader"
     current_row += 1
 
-    emp_dir_headers = ["Сотрудник", "Инвест-направление", "Количество часов"]
-    _write_row(ws, current_row, emp_dir_headers, style="ta_table_header")
-    current_row += 1
+    people_headers = [
+        "Сотрудник",
+        "План, ч",
+        "План FTE",
+        "Факт, ч",
+        "Факт FTE",
+        "Разница, ч",
+        "Разница FTE",
+    ]
 
-    emp_dir_hours: dict[tuple[str, str], float] = defaultdict(float)
-
-    for r in auto_rows:
-        emp_dir_hours[(r.username, r.invest_project)] += r.hours
-
-    for r in buh_rows:
-        if r.invest_project:
-            emp_dir_hours[(r.username, r.invest_project)] += r.hours
-
-    for r in manual_rows:
-        if r.invest_project and r.percentage is not None:
-            emp_dir_hours[(r.username, r.invest_project)] += (
-                r.hours * r.percentage / 100.0
+    if project_blocks:
+        for block in project_blocks:
+            title_cell = ws.cell(
+                row=current_row, column=1, value=format_project_total_line(block)
             )
+            title_cell.font = _FONT_SUBHEADER
+            title_cell.alignment = _ALIGN_LEFT
+            title_cell.fill = _FILL_ACCENT
+            ws.merge_cells(
+                start_row=current_row,
+                start_column=1,
+                end_row=current_row,
+                end_column=7,
+            )
+            for col in range(2, 8):
+                ws.cell(row=current_row, column=col).fill = _FILL_ACCENT
+                ws.cell(row=current_row, column=col).border = _THIN_BORDER
+            title_cell.border = _THIN_BORDER
+            if block.delta_fte is not None and abs(block.delta_fte) > 0.05:
+                title_cell.fill = _FILL_WARNING
+                for col in range(2, 8):
+                    ws.cell(row=current_row, column=col).fill = _FILL_WARNING
+            current_row += 1
 
-    emp_dir_total = 0.0
-    if emp_dir_hours:
-        for (uname, direction) in sorted(emp_dir_hours.keys()):
-            hours = emp_dir_hours[(uname, direction)]
-            _write_row(ws, current_row, [
-                uname, direction, round(hours, 2),
-            ], style="ta_data")
-            ws.cell(row=current_row, column=3).style = "ta_mono"
-            emp_dir_total += hours
+            ws.cell(
+                row=current_row, column=1, value="Детализация по людям"
+            ).font = _FONT_LABEL
+            current_row += 1
+
+            _write_row(ws, current_row, people_headers, style="ta_table_header")
+            current_row += 1
+
+            for row in block.people:
+                _write_row(ws, current_row, [
+                    row.username,
+                    row.plan_hours if row.plan_hours is not None else "—",
+                    row.plan_fte if row.plan_fte is not None else "—",
+                    row.fact_hours,
+                    row.fact_fte if row.fact_fte is not None else "—",
+                    row.delta_hours if row.delta_hours is not None else "—",
+                    row.delta_fte if row.delta_fte is not None else "—",
+                ], style="ta_data")
+                for col in (2, 3, 4, 5, 6, 7):
+                    ws.cell(row=current_row, column=col).style = "ta_mono"
+                if row.delta_fte is not None and abs(row.delta_fte) > 0.05:
+                    for col in range(1, 8):
+                        ws.cell(row=current_row, column=col).fill = _FILL_WARNING
+                current_row += 1
+
             current_row += 1
     else:
-        ws.cell(row=current_row, column=1, value="Нет записей").font = _FONT_LABEL
-        current_row += 1
-
-    ws.cell(row=current_row, column=2, value="Итого").font = _FONT_SUBHEADER
-    cell = ws.cell(row=current_row, column=3, value=round(emp_dir_total, 2))
-    cell.style = "ta_mono"
-    cell.font = _FONT_SUBHEADER
-    current_row += 2
+        ws.cell(row=current_row, column=1, value="Нет данных").font = _FONT_LABEL
+        current_row += 2
 
     # === SECTION 2: Auto-allocated entries (Type 1) ===
     ws.cell(row=current_row, column=1, value="Автоматическое распределение (100% инвест)").style = "ta_subheader"
@@ -1175,12 +1150,12 @@ def _build_invest_sheet(
 
     _set_column_widths(ws, {
         1: 36,   # Сотрудник / Инвест-проект
-        2: 20,   # Ключ
-        3: 50,   # Название задачи
-        4: 16,   # Часы
-        5: 26,   # BUH Company / Процент
-        6: 22,   # Инвест-проект / Инвест-часы
-        7: 22,   # Инвест-проект (section 4)
+        2: 20,   # Ключ / План, ч
+        3: 50,   # Название задачи / План FTE
+        4: 16,   # Часы / Факт, ч
+        5: 26,   # BUH Company / Процент / Факт FTE
+        6: 22,   # Инвест-проект / Инвест-часы / Разница, ч
+        7: 22,   # Инвест-проект / Разница FTE
     })
 
 
@@ -1202,6 +1177,9 @@ def generate_report(upload_id: int, db: Session) -> bytes:
     )
     if not worklogs:
         raise ValueError(f"No worklog entries for upload {upload_id}")
+
+    upload = db.query(Upload).filter(Upload.id == upload_id).first()
+    checks_completed = upload is not None and upload.status == "checked"
 
     check_results: list[CheckResult] = (
         db.query(CheckResult)
@@ -1228,7 +1206,7 @@ def generate_report(upload_id: int, db: Session) -> bytes:
 
     # 1) Summary sheet — must be first
     ws_summary = wb.create_sheet(title="Сводка")
-    _build_summary_sheet(ws_summary, wl_by_user, cr_by_user)
+    _build_summary_sheet(ws_summary, wl_by_user, cr_by_user, checks_completed)
 
     # 2) Distribution sheet — second
     ws_distribution = wb.create_sheet(title="Распределение")

@@ -17,7 +17,7 @@ projects.
 
 ## Current State
 
-The rules file `data/input/Issues CHANGE (2).xlsx` (sheet "LOG") already
+The rules file `data/input/Issues CHANGE (3).xlsx` (sheet "LOG") already
 contains columns A-H used by the permitted-task checker.  Two new columns have
 been added by the user:
 
@@ -39,12 +39,17 @@ only; columns I-J are ignored.  No invest-related logic exists yet.
 
 Tasks with invest data fall into four categories:
 
-### Type 1 — Fully automatic (I="MENA", J=empty)
+### Type 1 — Fully automatic (I is a concrete project name, J=empty)
 
-18 task keys, all UAE and Saudi Arabia tasks.  100% of logged hours go to MENA
-automatically.  No user input needed.
+Logged hours go 100% to the project named in column I.  No user input needed.
 
-Example keys: BUH-73282, BUH-73284, BUH-105068, BUH-73328.
+- **MENA** — 17 UAE and Saudi Arabia keys (e.g. BUH-73282, BUH-73284,
+  BUH-105068, BUH-73328).
+- **Alphyn** — 9 keys that mirror the MENA operational set:
+  BUH-121400 (Аудирование и Сопровождение), BUH-122582 (платежи),
+  BUH-122583 (выписки), BUH-122585 (авансовые отчёты), BUH-122586 (первичка),
+  BUH-122587 (ЗП), BUH-122589 (справки), BUH-122591 (отчётность),
+  BUH-122592 (акты сверки).
 
 ### Type 2 — Manual percentage (I="MENA / другой", J="руками, задавая процент")
 
@@ -87,14 +92,18 @@ Phase 1.
 
 ## User Workflow
 
-1. Upload worklog file, run checks (existing flow, unchanged).
-2. Select which employees need invest allocation (new UI section).
-3. Upload BUH company CSV files (one or more) for the current period.
-4. Fill in manual allocations in the UI:
+1. Upload worklog file (existing flow, unchanged).
+2. Optionally run checks (existing flow). Invest allocation no longer
+   depends on this step.
+3. Select which employees need invest allocation (new UI section).
+4. Upload BUH company CSV files (one or more) for the current period.
+5. Fill in manual allocations in the UI:
    - Set percentages for shared tasks (Type 2).
    - Assign invest project for ambiguous tasks (Types 3 + unmatched Type 4).
-5. Download Excel report — it now contains an "Инвест-направления" sheet with
-   all auto-calculated and manually-entered allocations.
+6. Download Excel report — it now contains an "Инвест-направления" sheet with
+   all auto-calculated and manually-entered allocations. The report can be
+   downloaded without running checks; check-related sheets stay empty and
+   the summary status is "Не проверялось".
 
 ## Phases
 
@@ -148,8 +157,9 @@ from app.services.permitted_tasks import load_permitted_tasks
 from app.services.buh_company import parse_buh_csv, resolve_invest_project
 
 reg = load_permitted_tasks()
-# Type 1 — auto MENA
+# Type 1 — auto MENA / Alphyn
 assert reg.get_invest_info("BUH-73282", "BUH", "Task") == ("MENA", "auto")
+assert reg.get_invest_info("BUH-122582", "BUH", "Task") == ("Alphyn", "auto")
 # Type 2 — manual percent
 assert reg.get_invest_info("BUH-73000", "BUH", "Task")[1] == "manual_percent"
 # No invest data
@@ -243,7 +253,8 @@ Register the router in `backend/app/main.py`.
 **2c. Frontend component.**
 
 New file `frontend/src/components/invest-panel.tsx`.  This is a panel that
-appears on the main page after checks are completed (status = "checked").
+appears on the main page after a worklog file is uploaded.  Checks are
+optional and not required for this panel.
 It contains three steps:
 
 Step 1 — Employee selection and CSV upload.  A card with two parts:
@@ -278,7 +289,8 @@ Add API helper functions in `frontend/src/lib/api.ts`:
 - `getInvestData(uploadId)`, `saveInvestAllocations(uploadId, allocations)`
 
 Update `frontend/src/app/page.tsx` to render `<InvestPanel>` after
-`<CheckResults>` when upload status is "checked".
+`<CheckResults>` as soon as a worklog file is uploaded.  Running checks is
+not required.
 
 Follow `docs/brandbook.html` for all visual styling.
 
@@ -384,6 +396,34 @@ End-to-end verification after all three phases:
   wants control over who is included.
   Date: 2026-06-08
 
+- Decision: Manual allocation of one task can go to several invest projects
+  at once (several percentage+project rows).  The database already allowed
+  multiple `InvestAllocation` rows per task; the UI and aggregation now
+  keep all of them instead of keeping only the last one.
+  Rationale: Shared tasks (team management, etc.) are often split across
+  MENA and other invest directions in the same month.
+  Date: 2026-08-20
+
+- Decision: Invest project dropdowns and reports list MENA first, then the
+  remaining names alphabetically.
+  Rationale: MENA is the primary invest direction and should be easiest to
+  pick.
+  Date: 2026-08-20
+
+- Decision: Plan-FTE tasks (GENERAL / GBTUTORIAL) allocate hours as
+  logged_hours × FTE, not as a proportional split of all logged hours.
+  Example: Alphyn 0.2 FTE + MENA 0.1 FTE and 40 h on GENERAL → Alphyn 8 h,
+  MENA 4 h (the remaining 28 h stay outside invest directions).
+  Rationale: FTE is already the share of full time; it must not be
+  renormalized to 100% across invest projects only.
+  Date: 2026-08-20
+
+- Decision: Invest allocation and the Excel download are available immediately
+  after a worklog file is uploaded. Running time-log checks is optional.
+  Rationale: Invest distribution is a separate workflow. The user should not
+  have to wait for comment/hours checks when they only need the invest report.
+  Date: 2026-08-20
+
 ## Surprises & Discoveries
 
 - The CSV files use UTF-8-BOM encoding and have a Cyrillic "С" in the
@@ -404,6 +444,15 @@ End-to-end verification after all three phases:
   (DBFZ: 343 rows, DBSA: 57 rows, DBAD: 24 rows).  No non-MENA companies
   were observed in the sample data.
   Date: 2026-06-08
+
+- The MENA keyword list in `Issues CHANGE (3).xlsx` now includes `DBAD`
+  and `DB AD` so Abu Dhabi company names in task titles resolve to MENA.
+  Date: 2026-08-20
+
+- The rules workbook now lists nine Alphyn Type 1 (auto) keys, not only
+  BUH-121400.  They use I="Alphyn" and empty J, so the existing auto
+  allocator already sends 100% of those hours to Alphyn.
+  Date: 2026-08-20
 
 ## Outcomes & Retrospective
 

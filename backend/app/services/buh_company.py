@@ -15,6 +15,10 @@ MENA_BUH_COMPANIES: set[str] = {
     "DBAD - Databorn FZ LLC Abu Dhabi",
 }
 
+ALPHYN_BUH_COMPANIES: set[str] = {
+    "ALFZ - Alphyn AI FZ LLC",
+}
+
 _KEY_HEADER = "Issue key"
 _BUH_HEADER = "Custom field (BUH Company)"
 
@@ -67,4 +71,6 @@ def resolve_invest_project(buh_company: str) -> str | None:
     """Return the invest project name for a BUH Company value, or None."""
     if buh_company in MENA_BUH_COMPANIES:
         return "MENA"
+    if buh_company in ALPHYN_BUH_COMPANIES:
+        return "Alphyn"
     return None

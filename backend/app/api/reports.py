@@ -23,19 +23,20 @@ _XLSX_MEDIA_TYPE = (
 
 @router.get("/{upload_id}/report")
 def download_report(upload_id: int, db: Session = Depends(get_db)):
-    """Generate and return the Excel report for a completed upload."""
+    """Generate and return the Excel report for an uploaded worklog file.
+
+    Checks are optional. While a check run is in progress the report is
+    blocked so the file does not mix incomplete results.
+    """
 
     upload = db.query(Upload).filter(Upload.id == upload_id).first()
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found.")
 
-    if upload.status != "checked":
+    if upload.status == "checking":
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Отчёт можно скачать только после завершения проверки. "
-                f"Текущий статус загрузки: «{upload.status}»."
-            ),
+            detail="Дождитесь окончания проверки, затем скачайте отчёт.",
         )
 
     try:

@@ -9,12 +9,13 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s - %(mess
 
 from app.api import checks, health, invest, reports, uploads
 from app.config import FRONTEND_DIR, settings
-from app.database import Base, engine
+from app.database import Base, engine, run_migrations
 from app.models import (  # noqa: F401 — ensure models are registered
     BuhCompanyMapping,
     CheckResult,
     InvestAllocation,
     InvestEmployeeSelection,
+    InvestFtePlan,
     Upload,
     WorklogEntry,
 )
@@ -23,6 +24,8 @@ from app.models import (  # noqa: F401 — ensure models are registered
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    run_migrations()
+    checks.reset_interrupted_checks()
     yield
 
 
@@ -35,7 +38,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -52,8 +52,6 @@ def run_checks(
     if not worklogs:
         raise ValueError(f"No worklog entries for upload {upload_id}")
 
-    db.query(CheckResult).filter(CheckResult.upload_id == upload_id).delete()
-
     registry = load_permitted_tasks()
     results: list[CheckResult] = []
     logger.info("run_checks: upload=%d, %d worklogs", upload_id, len(worklogs))
@@ -376,10 +374,14 @@ def run_checks(
     logger.info("all steps done, %d issues total", len(results))
 
     # ---- Persist -----------------------------------------------------------
+    # Keep the long-running steps above read-only so SQLite is not write-locked
+    # while the rules file is parsed and AI review is in progress.
+    db.query(CheckResult).filter(CheckResult.upload_id == upload_id).delete()
     for r in results:
         db.add(r)
 
     upload.status = "checked"
+    upload.error_message = None
     db.commit()
 
     return results

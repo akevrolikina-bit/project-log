@@ -38,3 +38,17 @@ class BuhCompanyMapping(Base):
     task_key: Mapped[str] = mapped_column(String, nullable=False)
     buh_company: Mapped[str] = mapped_column(String, nullable=False)
     invest_project: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class InvestFtePlan(Base):
+    """Per-employee planned FTE shares per invest project."""
+
+    __tablename__ = "invest_fte_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    upload_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("uploads.id"), nullable=False
+    )
+    username: Mapped[str] = mapped_column(String, nullable=False)
+    invest_project: Mapped[str] = mapped_column(String, nullable=False)
+    fte_value: Mapped[float] = mapped_column(Float, nullable=False)

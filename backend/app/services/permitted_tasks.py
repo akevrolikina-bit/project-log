@@ -22,8 +22,10 @@ Invest columns (I/J):
 
 from __future__ import annotations
 
+import io
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,6 +43,20 @@ INVEST_AUTO = "auto"
 INVEST_MANUAL_PERCENT = "manual_percent"
 INVEST_MANUAL_PROJECT = "manual_project"
 INVEST_BUH_COMPANY = "buh_company"
+INVEST_KEYWORD = "keyword"
+INVEST_PLAN_FTE = "plan_fte"
+
+# Shown first in dropdowns and reports; remaining names stay alphabetical.
+_PREFERRED_INVEST_ORDER = ("MENA",)
+
+
+def sort_invest_projects(projects: Iterable[str]) -> list[str]:
+    """Return unique project names with MENA first, then A–Z."""
+    unique = {p.strip() for p in projects if p and str(p).strip()}
+    preferred = [p for p in _PREFERRED_INVEST_ORDER if p in unique]
+    preferred_set = set(preferred)
+    rest = sorted(p for p in unique if p not in preferred_set)
+    return preferred + rest
 
 
 @dataclass
@@ -57,6 +73,7 @@ class KeyRule:
     comment_rule: str = ""
     invest_direction: str = ""
     invest_allocation: str = ""
+    keyword_rules: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -71,6 +88,7 @@ class ProjectTypeRule:
     comment_rule: str = ""
     invest_direction: str = ""
     invest_allocation: str = ""
+    keyword_rules: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -225,9 +243,19 @@ class PermittedTasksRegistry:
 
         return None
 
-    def list_concrete_invest_directions(self) -> list[str]:
-        """Return sorted unique invest project names from rules (e.g. MENA, Alphyn).
+    def resolve_keyword_invest(
+        self, project: str, task_type: str, title: str
+    ) -> str | None:
+        """Resolve invest project from task title using keyword rules."""
+        ptr = self._pt_rules.get((project, task_type))
+        if ptr is None or ptr.invest_allocation != INVEST_KEYWORD:
+            return None
+        return match_keyword_project(title, ptr.keyword_rules)
 
+    def list_concrete_invest_directions(self) -> list[str]:
+        """Return unique invest project names from rules (e.g. MENA, Alphyn).
+
+        MENA is listed first; remaining names are alphabetical.
         Ambiguous labels like ``MENA / другой`` are excluded.
         """
         directions: set[str] = set()
@@ -241,7 +269,7 @@ class PermittedTasksRegistry:
                 rule.invest_direction
             ):
                 directions.add(rule.invest_direction.strip())
-        return sorted(directions)
+        return sort_invest_projects(directions)
 
     def get_comment_rule(self, key: str, project: str, task_type: str) -> str:
         """Return the comment rule for a task: 'strict', 'lenient', or ''."""
@@ -274,6 +302,33 @@ _INVEST_ALLOC_MAP = {
 }
 
 
+def _parse_keyword_rules(raw: str) -> dict[str, list[str]]:
+    """Parse multi-line keyword rules from column J."""
+    rules: dict[str, list[str]] = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.lower().startswith("по ключевым"):
+            continue
+        if "=" not in line:
+            continue
+        project, _, keywords_part = line.partition("=")
+        project = project.strip()
+        keywords = [k.strip() for k in keywords_part.split(",") if k.strip()]
+        if project and keywords:
+            rules[project] = keywords
+    return rules
+
+
+def match_keyword_project(title: str, keyword_rules: dict[str, list[str]]) -> str | None:
+    """Return the first invest project whose keyword appears in *title*."""
+    title_lower = title.lower()
+    for project, keywords in keyword_rules.items():
+        for keyword in keywords:
+            if keyword.lower() in title_lower:
+                return project
+    return None
+
+
 def _is_concrete_invest_direction(direction: str) -> bool:
     """True when column I names a single invest project (e.g. MENA, Alphyn).
 
@@ -286,11 +341,16 @@ def _is_concrete_invest_direction(direction: str) -> bool:
 
 def _normalize_invest_allocation(raw: str, invest_direction: str) -> str:
     """Map the raw invest allocation text to one of the INVEST_* constants."""
-    raw_lower = raw.strip().lower()
+    raw_stripped = raw.strip()
+    raw_lower = raw_stripped.lower()
     if not raw_lower:
         # Empty J → auto only for a concrete project name in I.
         return INVEST_AUTO if _is_concrete_invest_direction(invest_direction) else ""
-    return _INVEST_ALLOC_MAP.get(raw_lower, raw.strip())
+    if raw_lower.startswith("по ключевым словам"):
+        return INVEST_KEYWORD
+    if "пропорции от задаваемого плана" in raw_lower:
+        return INVEST_PLAN_FTE
+    return _INVEST_ALLOC_MAP.get(raw_lower, raw_stripped)
 
 
 def _parse_comment_rule(raw: str) -> str:
@@ -311,7 +371,7 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
     Parameters
     ----------
     path : path to the .xlsx file.  Defaults to
-           ``data/input/Issues CHANGE (2).xlsx`` relative to project root.
+           ``data/input/Issues CHANGE (3).xlsx`` relative to project root.
            Can also be set via ``PERMITTED_TASKS_PATH`` env var.
     """
     if path is None:
@@ -321,7 +381,14 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
     if not path.exists():
         raise FileNotFoundError(f"Permitted-tasks file not found: {path}")
 
-    wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+    try:
+        file_bytes = path.read_bytes()
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Permitted-tasks file is locked (close it in Excel): {path}"
+        ) from exc
+
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
 
     sheet_name = "LOG"
     if sheet_name not in wb.sheetnames:
@@ -359,6 +426,11 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
         invest_allocation = _normalize_invest_allocation(
             invest_alloc_raw, invest_dir_raw
         )
+        keyword_rules = (
+            _parse_keyword_rules(invest_alloc_raw)
+            if invest_allocation == INVEST_KEYWORD
+            else {}
+        )
         # Drop invest metadata when allocation could not be determined
         # (e.g. I="MENA / другой" with empty J — ambiguous, not auto).
         invest_direction = invest_dir_raw if invest_allocation else ""
@@ -376,6 +448,7 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
                     comment_rule=comment_rule,
                     invest_direction=invest_direction,
                     invest_allocation=invest_allocation,
+                    keyword_rules=keyword_rules,
                 )
             )
         elif proj and typ:
@@ -389,6 +462,7 @@ def load_permitted_tasks(path: str | Path | None = None) -> PermittedTasksRegist
                     comment_rule=comment_rule,
                     invest_direction=invest_direction,
                     invest_allocation=invest_allocation,
+                    keyword_rules=keyword_rules,
                 )
             )
 
